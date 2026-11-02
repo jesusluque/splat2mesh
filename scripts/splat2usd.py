@@ -72,6 +72,15 @@ def process(inp: Path, out_root: Path, a) -> dict:
             ply = inp
             y_down = a.y_down
             antialias = not a.no_antialias
+        if a.direct:                     # no render: opacity field → mesh, colour from the gaussians
+            from splat2mesh.direct import run_direct
+            rep["mesh"] = run_direct(ply, work / "usd", faces=a.faces, tex_res=a.tex, y_down=y_down,
+                                     smooth=a.smooth)
+            m = rep["mesh"]
+            rep["ok"] = m["boundary_edges"] == 0 and m["non_manifold_edges"] <= 200
+            rep["t_total_s"] = round(time.time() - t0, 1)
+            (work / "report.json").write_text(json.dumps(rep, indent=2))
+            return rep
         views_dir = work / "render"
         cams = [PY, str(ROOT / "scripts/athenea_cams.py"), str(ply), str(views_dir)] + (["--rotate-x-180"] if y_down else [])
         sh(cams)
@@ -120,6 +129,8 @@ def main():
     ap.add_argument("--faces", type=int, default=20000)
     ap.add_argument("--tex", type=int, default=2048)
     ap.add_argument("--smooth", type=float, default=0.0, help="Taubin smoothing factor X (0 off, 1 = 10 it.; glass: 3+)")
+    ap.add_argument("--direct", action="store_true",
+                    help="no render: mesh from the splat's opacity field (~1 min; good on Idol splats, poor on thin surface splats)")
     ap.add_argument("--gaussians", type=int, default=262144)
     ap.add_argument("--y-down", action="store_true", help=".ply input is Y-down (COLMAP/Idol)")
     ap.add_argument("--y-up", action="store_true", help="override: Idol output already Y-up")

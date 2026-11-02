@@ -43,13 +43,30 @@ def clean(mesh: o3d.geometry.TriangleMesh, keep_ratio: float = 0.02) -> trimesh.
 
 
 def decimate(tm: trimesh.Trimesh, target_faces: int) -> trimesh.Trimesh:
-    import fast_simplification
+    """Quadric decimation that keeps the topology: Open3D first (keeps a closed manifold shell
+    closed), fast-simplification with low aggressiveness as fallback; the first result whose
+    component count and boundary did not get worse wins."""
     if len(tm.faces) <= target_faces:
         return tm
-    ratio = 1.0 - target_faces / len(tm.faces)
-    v, f = fast_simplification.simplify(tm.vertices.astype(np.float32), tm.faces.astype(np.int32),
-                                        target_reduction=ratio)
-    out = trimesh.Trimesh(v, f, process=True)
+    import fast_simplification
+    before = stats(tm)
+
+    def ok(m):
+        s = stats(m)
+        return (s["components"] <= before["components"] and s["boundary_edges"] <= before["boundary_edges"]
+                and s["non_manifold_edges"] <= before["non_manifold_edges"])
+
+    om = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(tm.vertices), o3d.utility.Vector3iVector(tm.faces))
+    q = om.simplify_quadric_decimation(int(target_faces))
+    out = trimesh.Trimesh(np.asarray(q.vertices), np.asarray(q.triangles), process=True)
+    if not ok(out):
+        for agg in (3, 1):
+            v, f = fast_simplification.simplify(tm.vertices.astype(np.float32), tm.faces.astype(np.int32),
+                                                target_reduction=1.0 - target_faces / len(tm.faces), agg=agg)
+            cand = trimesh.Trimesh(v, f, process=True)
+            if ok(cand):
+                out = cand
+                break
     trimesh.repair.fix_normals(out)
     return out
 
