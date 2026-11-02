@@ -78,6 +78,14 @@ def prepare(asset_dir, input_image, out_json, prompt: str = "", k: int = 6, min_
         ov = np.where(on[..., None], img, np.where(obj[..., None], grey, 0.0))
         path = work / f"region_{j}.png"
         Image.fromarray((ov * 255).astype(np.uint8)).save(path)
+        ys, xs = np.nonzero(on)                       # zoomed crop of the region for the VLM
+        if len(xs) > 20:
+            y0, y1, x0, x1 = (np.percentile(ys, 2), np.percentile(ys, 98), np.percentile(xs, 2), np.percentile(xs, 98))
+            pad = 0.15 * max(y1 - y0, x1 - x0) + 16
+            box = (int(max(x0 - pad, 0)), int(max(y0 - pad, 0)), int(min(x1 + pad, ov.shape[1])), int(min(y1 + pad, ov.shape[0])))
+            crop = Image.fromarray((ov * 255).astype(np.uint8)).crop(box)
+            crop.thumbnail((512, 512))
+            crop.save(work / f"crop_{j}.png")
         rgb = tex[mask][lab_all == j].mean(0) if (lab_all == j).any() else np.zeros(3)
         regions.append({"id": j, "overlay": str(path), "lab": C[j].tolist(), "colour": rgb.tolist(),
                         "share": round(float(share[j]), 4)})
@@ -148,3 +156,81 @@ def _usd_add_maps(usd_path: Path, maps_dir: Path):
                 t.CreateOutput("r", Sdf.ValueTypeNames.Float)
                 pbr.CreateInput(inp, Sdf.ValueTypeNames.Float).ConnectToSource(t.ConnectableAPI(), "r")
     stage.GetRootLayer().Save()
+
+
+# prompt words → material classes of scripts/material_vlm_yesno.py (the text an image came from is a prior)
+KEYWORDS = {
+    "gold metal": ["gold", "brass", "bronze", "copper", "gilt", "kintsugi", "koban"],
+    "silver metal": ["silver", "steel", "chrome", "aluminium", "aluminum", "iron", "tin", "metal", "pewter"],
+    "wood": ["wood", "wooden", "walnut", "oak", "maple", "pine", "teak", "cherry wood", "bamboo", "grain"],
+    "lacquer": ["lacquer", "lacquered", "urushi", "varnish", "enamel", "glossy paint"],
+    "glazed ceramic": ["porcelain", "ceramic", "glaze", "glazed", "celadon", "stoneware", "faience"],
+    "painted plastic": ["plastic", "painted", "vinyl", "toy"],
+    "matte": ["fabric", "cloth", "linen", "felt", "rubber", "unglazed", "bisque", "shade", "paper"],
+    "glass": ["glass", "crystal"],
+    "mother-of-pearl": ["mother-of-pearl", "nacre", "pearl"],
+}
+PRESET = {"gold metal": (1.0, 0.25), "silver metal": (1.0, 0.30), "wood": (0.0, 0.6), "lacquer": (0.0, 0.08),
+          "glazed ceramic": (0.0, 0.12), "painted plastic": (0.0, 0.35), "matte": (0.0, 0.85), "glass": (0.0, 0.03),
+          "mother-of-pearl": (0.0, 0.2)}
+
+
+def decide(spec_json, mentioned_weight: float = 1.0, other_weight: float = 0.25) -> dict:
+    """Re-decide each region's material from the VLM yes-scores × a prompt prior: classes whose words appear
+    in the prompt keep their score, the others are down-weighted (still possible when the VLM is sure)."""
+    import re
+    p = Path(spec_json); spec = json.loads(p.read_text())
+    text = spec.get("prompt", "").lower()
+    named = {k for k, ws in KEYWORDS.items() if any(re.search(r"\b" + re.escape(w) + r"\b", text) for w in ws)}
+    for r in spec["regions"]:
+        ys = r.get("yes_scores")
+        if not ys:
+            continue
+        post = {k: v * (mentioned_weight if (not named or k in named) else other_weight) for k, v in ys.items()}
+        best = max(post, key=post.get)
+        r["vlm_material"] = r.get("vlm_material", r.get("material"))
+        r.update(material=best, metallic=PRESET[best][0], roughness=PRESET[best][1], prior=sorted(named))
+    p.write_text(json.dumps(spec, indent=1))
+    return {"named": sorted(named), "regions": [(r["material"], r["share"]) for r in spec["regions"]]}
+
+
+def parse_description(desc: str) -> list[tuple[str, str]]:
+    """'gold: the bell, the coin; red lacquer: the collar; porcelain: the body' →
+    [('gold metal', 'the bell'), ('gold metal', 'the coin'), ('lacquer', 'the collar'), ('glazed ceramic', 'the body')]"""
+    import re
+    out = []
+    for part in re.split(r"[;\n]+", desc):
+        if ":" not in part:
+            continue
+        mat, things = part.split(":", 1)
+        m = mat.strip().lower()
+        cls = next((k for k, ws in KEYWORDS.items() if any(re.search(r"\b" + re.escape(w) + r"\b", m) for w in ws)), None)
+        if cls is None:
+            cls = m if m in PRESET else "glazed ceramic"
+        for t in things.split(","):
+            if t.strip():
+                out.append((cls, t.strip()))
+    return out
+
+
+def from_masks(spec_json, masks: dict, min_overlap: float = 0.15) -> dict:
+    """Semi-automatic: masks = {material class: HxW bool mask on the input image} (e.g. from ENEAS text prompts).
+    Each colour region takes the material whose mask covers most of that region's pixels in the input image;
+    regions no mask covers well keep the VLM/prompt decision."""
+    p = Path(spec_json); spec = json.loads(p.read_text())
+    img = np.asarray(Image.open(spec["image"]).convert("RGB"), np.float32) / 255
+    obj = ndi.binary_fill_holes(img.max(-1) > 0.03)
+    C = np.array([r["lab"] for r in spec["regions"]])
+    lab_px = ((_srgb_to_lab(img)[..., None, :] - C[None, None]) ** 2).sum(-1).argmin(-1)
+    for j, r in enumerate(spec["regions"]):
+        px = obj & (lab_px == j)
+        n = px.sum()
+        if n == 0:
+            continue
+        cover = {cls: float((m & px).sum() / n) for cls, m in masks.items()}
+        best = max(cover, key=cover.get) if cover else None
+        r["mask_cover"] = {k: round(v, 3) for k, v in cover.items()}
+        if best and cover[best] >= min_overlap:
+            r.update(material=best, metallic=PRESET[best][0], roughness=PRESET[best][1], source="mask")
+    p.write_text(json.dumps(spec, indent=1))
+    return {"regions": [(r["material"], r.get("source", "vlm"), r["share"]) for r in spec["regions"]]}
