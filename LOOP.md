@@ -81,3 +81,9 @@ USDZ for every model, everything committed + pushed, complete tutorial, and an a
 - 22:38 Autonomous night run (scripts/night_run.sh): Idol test set 3 (bulb, wine glass, perfume, candle, jade
   bangle, blue bottle, silver teapot, lantern) → flow for sets 1–3 into out/*_v5 (render fallback, Qwen parts,
   ENEAS 3D, PBR, Cryptomatte parts).
+- 23:50 athenea fixed the rt --denoise failure on constant PreviewSurface inputs (main-vdb 35a6c5a, build athenea-ptaux); hair-run still lacks it — set ATHENEA_BUILD=~/luc/athenea-ptaux/build/macos-arm64-release if needed.
+- 00:05 Flow running on render94 (ENEAS) + ixwin (Idol set 3) + render94 (Idol set 4, fixed watch/telescope images).
+  Fixes: apostrophes in part phrases (owl: masks not found → crash); fallback when ENEAS finds nothing; prompt is the
+  authority on the specific material ("gold" → "brass"; family missing from the prompt → the prompt's unused
+  material, e.g. red lacquer bowl described as porcelain → urushi lacquer); keyword matching by whole word
+  ("pla" no longer matches "plain"). Owl and bowl queued for redo.

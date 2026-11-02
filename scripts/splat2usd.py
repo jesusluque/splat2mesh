@@ -42,8 +42,24 @@ def sh(cmd, **kw):
     return r.stdout
 
 
+def idol_linux(image: Path, work: Path, gaussians: int) -> Path:
+    """Idol on a plain Linux CUDA host (~/splat2mesh_eneas/idol-sdk)."""
+    d = f"splat2mesh_eneas/idol_jobs/{work.name}"
+    sh(["ssh", IXWIN, f"mkdir -p ~/{d}"])
+    sh(["scp", "-q", str(image), f"{IXWIN}:{d}/{image.name}"])
+    mode = "real" if image.suffix.lower() in {".jpg", ".jpeg"} else "synthetic"
+    sh(["ssh", IXWIN, f"cd ~/splat2mesh_eneas/idol-sdk && ATTN_BACKEND=sdpa .venv/bin/python -m idol.sample "
+                      f"--image ~/{d}/{image.name} --mode {mode} --out ~/{d} --num_gaussians {gaussians}"])
+    ply = work / f"{image.stem}.ply"
+    sh(["scp", "-q", f"{IXWIN}:{d}/{image.stem}.ply", str(ply)])
+    sh(["scp", "-q", f"{IXWIN}:{d}/{image.stem}_input.png", str(work / "idol_input.png")])
+    return ply
+
+
 def idol(image: Path, work: Path, gaussians: int) -> Path:
     """Image → 3DGS .ply with Idol on ixwin (synthetic mode for renders/generated images, real for photos)."""
+    if os.environ.get("SPLAT2MESH_IDOL_LINUX") == "1":
+        return idol_linux(image, work, gaussians)
     sh(["ssh", IXWIN, f'mkdir "{IX_DIR}" 2>nul & exit 0'])
     sh(["scp", "-q", str(image), f"{IXWIN}:{IX_DIR}/{image.name}"])
     mode = "real" if image.suffix.lower() in {".jpg", ".jpeg"} else "synthetic"
@@ -100,7 +116,8 @@ def process(inp: Path, out_root: Path, a) -> dict:
         from splat2mesh.views import load_athenea
         views = load_athenea(views_dir)
         asset = work / "usd"
-        rep["mesh"] = run(views, asset, faces=a.faces, tex_res=a.tex, voxel=None, smooth=a.smooth)
+        # render path bakes 87 views per texel: 4096² is ~4× slower for little gain on these objects
+        rep["mesh"] = run(views, asset, faces=a.faces, tex_res=min(a.tex, a.render_tex), voxel=None, smooth=a.smooth)
         rep["qa"] = qa(asset, load_athenea(views_dir, erode_px=0))
         if a.glass and a.smooth == 0:
             print("    note: --glass without --smooth; glass shows fusion bumps (try --smooth 3)", flush=True)
@@ -137,6 +154,8 @@ def main():
                     help="no render: mesh from the splat's opacity field (~1 min; good on Idol splats, poor on thin surface splats)")
     ap.add_argument("--max-folds", type=int, default=500,
                     help="--direct: above this many folded edges (dihedral > 120°) use the render path instead")
+    ap.add_argument("--render-tex", type=int, default=2048, help="texture size cap on the render path")
+    ap.add_argument("--skip-done", action="store_true", help="skip inputs whose report.json says ok")
     ap.add_argument("--gaussians", type=int, default=262144)
     ap.add_argument("--y-down", action="store_true", help=".ply input is Y-down (COLMAP/Idol)")
     ap.add_argument("--y-up", action="store_true", help="override: Idol output already Y-up")
@@ -158,6 +177,10 @@ def main():
     out_root.mkdir(parents=True, exist_ok=True)
     reps = []
     for i, p in enumerate(items, 1):
+        done = out_root / p.stem / "report.json"
+        if a.skip_done and done.exists() and json.loads(done.read_text()).get("ok"):
+            reps.append(json.loads(done.read_text())); print(f"[{i}/{len(items)}] {p.name} done, skipped", flush=True)
+            continue
         print(f"[{i}/{len(items)}] {p.name} ...", flush=True)
         r = process(p, out_root, a)
         reps.append(r)

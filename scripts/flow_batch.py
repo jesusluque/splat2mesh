@@ -15,6 +15,13 @@ items = [d for d in sorted(src.iterdir()) if d.is_dir() and (d / f"{d.name}.ply"
 # 1) direct meshes (skip when present)
 for d in items:
     o = out / d.name / "usd"
+    prev = d / "usd"                               # splat2usd already built an HD mesh here? reuse it
+    if not (o / "asset.usda").exists() and (prev / "asset.usda").exists() and (d / "report.json").exists():
+        rp = json.loads((d / "report.json").read_text()).get("mesh", {})
+        if rp.get("faces", 0) >= 60000:
+            import shutil
+            o.parent.mkdir(parents=True, exist_ok=True); shutil.copytree(prev, o)
+            print(d.name, "reused HD mesh", rp.get("faces"), flush=True)
     if not (o / "asset.usda").exists():
         r = run_direct(d / f"{d.name}.ply", o, y_down=True)
         print(d.name, "direct", r["components"], r["non_manifold_edges"], r["uv_charts"], "folds", r["folds"], flush=True)
@@ -35,6 +42,31 @@ if need:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for d in need:
         (out / d.name / "materials.txt").write_text(Path(d / "idol_input.materials.txt").read_text())
+# 2b) the generation prompt is the better authority on WHICH metal/wood/glass: swap the VLM's generic family
+#     member for the specific one the prompt names ("gold" → "brass" when the prompt says brass)
+from splat2mesh.materials import LIB, lookup
+for d in items:
+    f = out / d.name / "materials.txt"
+    pr = prompts[int(d.name)].lower(); desc = f.read_text()
+    import re
+    named = {k for k, v in LIB.items() if any(re.search(r"\b" + re.escape(w) + r"\b", pr) for w in v["keywords"])}
+    new = []
+    for part in desc.split(";"):
+        if ":" not in part:
+            continue
+        mat, things = part.split(":", 1); m = mat.strip()
+        cls = m if m in LIB else lookup(m)
+        if cls and cls not in named:
+            fam = [k for k in named if LIB[k]["class"] == LIB[cls]["class"]]
+            if len(fam) == 1:
+                m = fam[0]
+            elif not fam:            # family absent from the prompt: take the prompt material the description misses
+                used = {lookup(x.split(":")[0]) or x.split(":")[0].strip() for x in desc.split(";") if ":" in x}
+                missing = [k for k in named if k not in used and LIB[k]["class"] not in {LIB[u]["class"] for u in used if u in LIB}]
+                if len(missing) == 1:
+                    m = missing[0]
+        new.append(f"{m}: {things.strip()}")
+    f.write_text("; ".join(new))
 # 3) ENEAS 3D + PBR per object
 summary = {}
 for d in items:
