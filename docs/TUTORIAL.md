@@ -110,6 +110,44 @@ Already have a splat? Start here instead:
 
 A whole folder of images and `.ply` files is a batch: `splat2usd.py my_folder/ --out out/batch`.
 
+## 4b. Fast mode: `--direct` (no rendering)
+
+```sh
+.venv/bin/python scripts/splat2usd.py lucky_cat.png --direct --gaussians 524288 --out out/tutorial
+```
+
+Instead of photographing the splat from 87 cameras, `--direct` builds the mesh **straight from the gaussians**:
+
+1. Every gaussian adds its opacity to a 3D grid (≈ 320 cells across the object): `O(x) = 1 − Π(1 − αᵢ·Gᵢ(x))`.
+2. The solid is where the opacity passes 0.3; small gaps between gaussians are closed, hollow insides are
+   filled and loose specks are dropped, so the result is **one closed shell**.
+3. Marching cubes gives the surface; a topology-preserving quadric decimation brings it to 20 000 faces
+   without breaking it apart.
+4. Each texel of the UV atlas takes the colour of the gaussians right at the surface, weighted by how much
+   they cover that point (gaussians buried inside barely count).
+
+Same cat, left the splat, right the `--direct` mesh:
+
+<img src="img/maneki_direct_compare.jpg" width="480">
+
+And its UV map (texture with triangle outlines, and the layout on its own):
+
+<img src="img/maneki_direct_uv.jpg" width="100%">
+
+The direct mesh is smoother and cleaner, so xatlas cuts it into far fewer, larger charts: the face, the 福
+coin and the flank flowers each sit in one chart. The black chart is again the underside that Idol leaves dark.
+
+| Same splat | render path (default) | `--direct` |
+|---|---|---|
+| Time after Idol | ~9 min | **~40 s** |
+| Components / non-manifold / open edges | 1 / 0 / 0 | **1 / 0 / 0, watertight** |
+| UV charts | 243 | **108** |
+| PSNR vs the splat | 24.1 dB | **27.1 dB** |
+
+Use `--direct` for splats made by Idol (gaussians with volume). For thin, surface-aligned splats, such as
+ones converted from meshes or some photogrammetry captures, keep the render path: there the opacity field
+has holes that `--direct` cannot close.
+
 ## 5. What you get
 
 ```
