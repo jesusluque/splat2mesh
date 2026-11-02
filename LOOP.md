@@ -49,3 +49,9 @@ Test set: porcelain, metal, wood, lacquer, mixes. GPU on the Mac only through sh
 - ENEAS in ixwin WSL works: first call 28 min (download 9 GB), then ~13 s per phrase. One instance per phrase
   ("bell and coin" → bell only). Overlapping masks: smallest wins. scripts/materials_eneas.py = semi-automatic
   materials from a short description "material: part, part; …".
+- 21:30 Material library: 58 PBR presets (metallic, roughness, range, ior, metal F0, keywords) — catalogue values.
+- 21:40 ENEAS 3D: 24-view orbit of the textured mesh (white bg, texel index per pixel), phrases tracked across views,
+  masks back-projected and voted per texel. First run grounded on the BACK view (bad frame choice) → bell = whole cat.
+  Fixed: annotation frame chosen by colour match of object crops (front = frame 6). Rerunning.
+- Test set v3 (level 0.15): owl and lamp base fixed; published (web v3). VLM labels still wrong for owl (no wood) and
+  black lacquer box (→ gold): cases for ENEAS 3D with a description.

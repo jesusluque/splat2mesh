@@ -313,6 +313,15 @@ def from_view_masks(spec_json, orbit_dir, masks: dict) -> dict:
             maj = np.bincount(known, minlength=len(names)).argmax()
             fill = sel & (cls_tex < 0)
             cls_tex[fill] = maj
+    # every colour region also gets the majority class of its texels (fallback for apply())
+    for j, r in enumerate(spec["regions"]):
+        sel = mask & (reg == j)
+        known = cls_tex[sel]; known = known[known >= 0]
+        if len(known):
+            cls = names[np.bincount(known, minlength=len(names)).argmax()].split("|")[0]
+        else:
+            cls = r.get("material", "glazed ceramic")
+        r.update(material=cls, metallic=PRESET[cls][0], roughness=PRESET[cls][1])
     out = Path(spec["asset"])
     classes = [n.split("|")[0] for n in names]
     np.save(out / "mat" / "texel_class.npy", cls_tex)
