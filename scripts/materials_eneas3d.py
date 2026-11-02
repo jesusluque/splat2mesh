@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]; sys.path.insert(0, str(ROOT))
-from splat2mesh.materials import prepare, parse_description, render_orbit, from_view_masks, apply_texel_classes
+from splat2mesh.materials import prepare, parse_description, render_orbit, from_view_masks, apply_texel_classes, export_parts
 
 HOST = os.environ.get("SPLAT2MESH_IDOL_HOST", "ixwin-tb")
 asset, image, desc = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
@@ -45,3 +45,4 @@ masks = {f"{cls}|{ph}": z[ph] for cls, ph in items if ph in z.files}
 print("annotation frame", ann, "| phrases", list(masks))
 print(from_view_masks(spec, orbit, masks))
 print(apply_texel_classes(spec))
+print('parts', export_parts(asset), export_parts(asset, 'asset_materials.usda', group='material'))

@@ -70,3 +70,14 @@ USDZ for every model, everything committed + pushed, complete tutorial, and an a
   help) → automatic fallback: --direct uses the render path when folds > 150 (others: 4–18). Box → render path.
 - Toaster and car images regenerated (seed 47) before Idol reached them.
 - Web viewer: 4 CC0 Poly Haven HDRIs (studio, photo studio, sunset, sky), buttons + auto-cycle every 8 s.
+- 22:15 User: odd stains (screenshot) at material borders. Cause: ENEAS phrase masks spill (flowers, porcelain
+  around gold branches) → metallic halos. Fix: refine_by_regions — each colour region only allows material classes
+  with ≥25 % of its votes; texel votes decide among them. Gold now follows the branches exactly.
+- Library: transmission / subsurface / thin_walled; finish_maps: metals' base colour = library F0 (polished metals:
+  F0 only — the baked colour is frozen reflections; matte metals keep 0.35 of the texture detail; dark ink on metal
+  stays non-metal), glass: uniform tint; transmission/subsurface/opacity maps; MaterialX standard_surface (mtlx
+  context, srgb_texture) next to UsdPreviewSurface. athenea renders it (porcelain SSS, gold).
+- HD: 80K faces, 4096² atlas (chunked bake; 153 s; RSS was 15 GB before chunking). Orbit 16 views for ENEAS.
+- 22:38 Autonomous night run (scripts/night_run.sh): Idol test set 3 (bulb, wine glass, perfume, candle, jade
+  bangle, blue bottle, silver teapot, lantern) → flow for sets 1–3 into out/*_v5 (render fallback, Qwen parts,
+  ENEAS 3D, PBR, Cryptomatte parts).

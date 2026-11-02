@@ -130,12 +130,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("inputs", nargs="+")
     ap.add_argument("--out", default=str(ROOT / "out/auto"))
-    ap.add_argument("--faces", type=int, default=20000)
-    ap.add_argument("--tex", type=int, default=2048)
+    ap.add_argument("--faces", type=int, default=80000)
+    ap.add_argument("--tex", type=int, default=4096)
     ap.add_argument("--smooth", type=float, default=0.0, help="Taubin smoothing factor X (0 off, 1 = 10 it.; glass: 3+)")
     ap.add_argument("--direct", action="store_true",
                     help="no render: mesh from the splat's opacity field (~1 min; good on Idol splats, poor on thin surface splats)")
-    ap.add_argument("--max-folds", type=int, default=150,
+    ap.add_argument("--max-folds", type=int, default=500,
                     help="--direct: above this many folded edges (dihedral > 120°) use the render path instead")
     ap.add_argument("--gaussians", type=int, default=262144)
     ap.add_argument("--y-down", action="store_true", help=".ply input is Y-down (COLMAP/Idol)")

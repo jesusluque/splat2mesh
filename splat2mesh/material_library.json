@@ -1,71 +1,1170 @@
 {
-  "about": "PBR presets for splat2mesh. metallic/roughness for UsdPreviewSurface (metallic-roughness workflow); ior for dielectrics; f0 = linear reflectance at normal incidence used as base colour for metals (values from widely used physically-based reference charts, e.g. Lagarde's and Hoffman's). roughness is a typical value for the finish named; 'range' gives the plausible span. These are catalogue values, not measurements.",
-  "materials": {
-    "gold":               {"class": "metal", "metallic": 1, "roughness": 0.20, "range": [0.05, 0.45], "ior": null, "f0": [1.000, 0.766, 0.336], "keywords": ["gold", "golden", "gilt", "gilded", "gold leaf", "kintsugi", "koban"]},
-    "brass":              {"class": "metal", "metallic": 1, "roughness": 0.25, "range": [0.10, 0.50], "ior": null, "f0": [0.910, 0.778, 0.423], "keywords": ["brass"]},
-    "bronze":             {"class": "metal", "metallic": 1, "roughness": 0.35, "range": [0.20, 0.60], "ior": null, "f0": [0.800, 0.580, 0.380], "keywords": ["bronze"]},
-    "copper":             {"class": "metal", "metallic": 1, "roughness": 0.25, "range": [0.10, 0.50], "ior": null, "f0": [0.955, 0.637, 0.538], "keywords": ["copper"]},
-    "silver":             {"class": "metal", "metallic": 1, "roughness": 0.15, "range": [0.05, 0.40], "ior": null, "f0": [0.972, 0.960, 0.915], "keywords": ["silver", "sterling"]},
-    "polished steel":     {"class": "metal", "metallic": 1, "roughness": 0.15, "range": [0.05, 0.30], "ior": null, "f0": [0.560, 0.570, 0.580], "keywords": ["polished steel", "stainless steel", "steel"]},
-    "brushed steel":      {"class": "metal", "metallic": 1, "roughness": 0.40, "range": [0.30, 0.60], "ior": null, "f0": [0.560, 0.570, 0.580], "keywords": ["brushed steel", "brushed metal"]},
-    "chrome":             {"class": "metal", "metallic": 1, "roughness": 0.05, "range": [0.02, 0.15], "ior": null, "f0": [0.550, 0.556, 0.554], "keywords": ["chrome", "chromed", "mirror"]},
-    "aluminium":          {"class": "metal", "metallic": 1, "roughness": 0.30, "range": [0.10, 0.60], "ior": null, "f0": [0.913, 0.922, 0.924], "keywords": ["aluminium", "aluminum"]},
-    "brushed aluminium":  {"class": "metal", "metallic": 1, "roughness": 0.45, "range": [0.30, 0.65], "ior": null, "f0": [0.913, 0.922, 0.924], "keywords": ["brushed aluminium", "brushed aluminum"]},
-    "iron":               {"class": "metal", "metallic": 1, "roughness": 0.50, "range": [0.30, 0.80], "ior": null, "f0": [0.560, 0.570, 0.580], "keywords": ["iron", "wrought iron"]},
-    "cast iron":          {"class": "metal", "metallic": 1, "roughness": 0.70, "range": [0.50, 0.90], "ior": null, "f0": [0.560, 0.570, 0.580], "keywords": ["cast iron"]},
-    "rusted iron":        {"class": "dielectric", "metallic": 0, "roughness": 0.85, "range": [0.70, 1.00], "ior": 1.5, "f0": null, "keywords": ["rust", "rusted", "rusty", "corroded"]},
-    "titanium":           {"class": "metal", "metallic": 1, "roughness": 0.35, "range": [0.15, 0.60], "ior": null, "f0": [0.542, 0.497, 0.449], "keywords": ["titanium"]},
-    "nickel":             {"class": "metal", "metallic": 1, "roughness": 0.25, "range": [0.10, 0.50], "ior": null, "f0": [0.660, 0.609, 0.526], "keywords": ["nickel"]},
-    "platinum":           {"class": "metal", "metallic": 1, "roughness": 0.15, "range": [0.05, 0.40], "ior": null, "f0": [0.673, 0.637, 0.585], "keywords": ["platinum"]},
-    "pewter / tin":       {"class": "metal", "metallic": 1, "roughness": 0.45, "range": [0.30, 0.70], "ior": null, "f0": [0.700, 0.700, 0.700], "keywords": ["pewter", "tin"]},
-    "patinated bronze":   {"class": "dielectric", "metallic": 0, "roughness": 0.65, "range": [0.50, 0.85], "ior": 1.5, "f0": null, "keywords": ["patina", "verdigris", "patinated"]},
-
-    "porcelain (glazed)": {"class": "ceramic", "metallic": 0, "roughness": 0.10, "range": [0.03, 0.20], "ior": 1.50, "f0": null, "keywords": ["porcelain", "china", "bone china"]},
-    "glazed ceramic":     {"class": "ceramic", "metallic": 0, "roughness": 0.15, "range": [0.05, 0.30], "ior": 1.50, "f0": null, "keywords": ["ceramic", "glaze", "glazed", "faience", "majolica", "celadon"]},
-    "crackle glaze":      {"class": "ceramic", "metallic": 0, "roughness": 0.18, "range": [0.08, 0.30], "ior": 1.50, "f0": null, "keywords": ["crackle", "craquelure"]},
-    "stoneware (matte glaze)": {"class": "ceramic", "metallic": 0, "roughness": 0.50, "range": [0.35, 0.70], "ior": 1.50, "f0": null, "keywords": ["stoneware", "matte glaze", "satin glaze"]},
-    "unglazed clay / terracotta": {"class": "ceramic", "metallic": 0, "roughness": 0.90, "range": [0.75, 1.00], "ior": 1.50, "f0": null, "keywords": ["terracotta", "unglazed", "bisque", "earthenware", "clay"]},
-
-    "urushi lacquer":     {"class": "coating", "metallic": 0, "roughness": 0.05, "range": [0.02, 0.15], "ior": 1.52, "f0": null, "keywords": ["urushi", "japanese lacquer", "lacquerware"]},
-    "gloss lacquer":      {"class": "coating", "metallic": 0, "roughness": 0.08, "range": [0.03, 0.20], "ior": 1.50, "f0": null, "keywords": ["lacquer", "lacquered", "piano black", "high gloss"]},
-    "varnished wood":     {"class": "wood", "metallic": 0, "roughness": 0.25, "range": [0.10, 0.40], "ior": 1.50, "f0": null, "keywords": ["varnish", "varnished", "polished wood", "french polish"]},
-    "enamel":             {"class": "coating", "metallic": 0, "roughness": 0.12, "range": [0.05, 0.25], "ior": 1.50, "f0": null, "keywords": ["enamel", "enamelled", "cloisonne", "cloisonné"]},
-    "gloss paint":        {"class": "coating", "metallic": 0, "roughness": 0.20, "range": [0.10, 0.35], "ior": 1.50, "f0": null, "keywords": ["gloss paint", "glossy paint", "painted"]},
-    "satin paint":        {"class": "coating", "metallic": 0, "roughness": 0.45, "range": [0.35, 0.60], "ior": 1.50, "f0": null, "keywords": ["satin", "eggshell"]},
-    "matte paint":        {"class": "coating", "metallic": 0, "roughness": 0.80, "range": [0.65, 0.95], "ior": 1.50, "f0": null, "keywords": ["matte paint", "flat paint", "chalk paint"]},
-    "car paint":          {"class": "coating", "metallic": 0, "roughness": 0.10, "range": [0.03, 0.20], "ior": 1.50, "f0": null, "keywords": ["car paint", "automotive paint", "clear coat"]},
-
-    "raw wood":           {"class": "wood", "metallic": 0, "roughness": 0.70, "range": [0.55, 0.90], "ior": 1.50, "f0": null, "keywords": ["wood", "wooden", "pine", "birch", "maple", "plywood", "grain"]},
-    "oiled hardwood":     {"class": "wood", "metallic": 0, "roughness": 0.45, "range": [0.30, 0.60], "ior": 1.50, "f0": null, "keywords": ["walnut", "oak", "teak", "mahogany", "cherry wood", "oiled", "carved wood"]},
-    "bamboo / rattan":    {"class": "wood", "metallic": 0, "roughness": 0.55, "range": [0.40, 0.70], "ior": 1.50, "f0": null, "keywords": ["bamboo", "rattan", "wicker", "cane"]},
-    "cork":               {"class": "wood", "metallic": 0, "roughness": 0.90, "range": [0.80, 1.00], "ior": 1.50, "f0": null, "keywords": ["cork"]},
-
-    "glossy plastic":     {"class": "plastic", "metallic": 0, "roughness": 0.20, "range": [0.05, 0.35], "ior": 1.46, "f0": null, "keywords": ["plastic", "abs", "acrylic", "polystyrene", "toy"]},
-    "matte plastic":      {"class": "plastic", "metallic": 0, "roughness": 0.60, "range": [0.45, 0.80], "ior": 1.46, "f0": null, "keywords": ["matte plastic", "nylon", "pla", "3d printed"]},
-    "vinyl":              {"class": "plastic", "metallic": 0, "roughness": 0.35, "range": [0.20, 0.50], "ior": 1.53, "f0": null, "keywords": ["vinyl", "pvc"]},
-    "rubber":             {"class": "plastic", "metallic": 0, "roughness": 0.85, "range": [0.70, 1.00], "ior": 1.52, "f0": null, "keywords": ["rubber", "silicone"]},
-
-    "glass":              {"class": "transparent", "metallic": 0, "roughness": 0.02, "range": [0.00, 0.10], "ior": 1.50, "f0": null, "keywords": ["glass", "transparent"]},
-    "frosted glass":      {"class": "transparent", "metallic": 0, "roughness": 0.45, "range": [0.30, 0.60], "ior": 1.50, "f0": null, "keywords": ["frosted", "sandblasted", "etched glass"]},
-    "crystal":            {"class": "transparent", "metallic": 0, "roughness": 0.01, "range": [0.00, 0.05], "ior": 1.55, "f0": null, "keywords": ["crystal", "lead crystal"]},
-    "quartz / gemstone":  {"class": "transparent", "metallic": 0, "roughness": 0.02, "range": [0.00, 0.10], "ior": 1.54, "f0": null, "keywords": ["quartz", "amethyst", "gem", "gemstone"]},
-    "diamond":            {"class": "transparent", "metallic": 0, "roughness": 0.01, "range": [0.00, 0.03], "ior": 2.42, "f0": null, "keywords": ["diamond"]},
-
-    "polished marble":    {"class": "stone", "metallic": 0, "roughness": 0.15, "range": [0.05, 0.30], "ior": 1.49, "f0": null, "keywords": ["marble", "polished stone", "onyx"]},
-    "honed stone":        {"class": "stone", "metallic": 0, "roughness": 0.60, "range": [0.45, 0.80], "ior": 1.50, "f0": null, "keywords": ["granite", "slate", "limestone", "sandstone", "stone"]},
-    "jade":               {"class": "stone", "metallic": 0, "roughness": 0.20, "range": [0.10, 0.35], "ior": 1.66, "f0": null, "keywords": ["jade", "nephrite", "jadeite"]},
-    "concrete / plaster": {"class": "stone", "metallic": 0, "roughness": 0.90, "range": [0.75, 1.00], "ior": 1.50, "f0": null, "keywords": ["concrete", "plaster", "cement", "stucco"]},
-
-    "mother-of-pearl":    {"class": "organic", "metallic": 0, "roughness": 0.15, "range": [0.05, 0.30], "ior": 1.53, "f0": null, "keywords": ["mother-of-pearl", "nacre", "pearl", "abalone"]},
-    "bone / ivory":       {"class": "organic", "metallic": 0, "roughness": 0.40, "range": [0.25, 0.60], "ior": 1.54, "f0": null, "keywords": ["bone", "ivory", "horn", "antler"]},
-    "amber / resin":      {"class": "organic", "metallic": 0, "roughness": 0.08, "range": [0.02, 0.20], "ior": 1.54, "f0": null, "keywords": ["amber", "resin", "epoxy"]},
-    "leather":            {"class": "organic", "metallic": 0, "roughness": 0.60, "range": [0.40, 0.80], "ior": 1.50, "f0": null, "keywords": ["leather"]},
-    "patent leather":     {"class": "organic", "metallic": 0, "roughness": 0.10, "range": [0.05, 0.20], "ior": 1.50, "f0": null, "keywords": ["patent leather"]},
-    "wax / candle":       {"class": "organic", "metallic": 0, "roughness": 0.45, "range": [0.30, 0.60], "ior": 1.45, "f0": null, "keywords": ["wax", "candle", "paraffin"]},
-
-    "cotton / linen":     {"class": "fabric", "metallic": 0, "roughness": 0.95, "range": [0.85, 1.00], "ior": 1.50, "f0": null, "keywords": ["cotton", "linen", "canvas", "fabric", "cloth", "shade"]},
-    "silk / satin":       {"class": "fabric", "metallic": 0, "roughness": 0.40, "range": [0.25, 0.55], "ior": 1.50, "f0": null, "keywords": ["silk", "satin fabric"]},
-    "velvet / felt":      {"class": "fabric", "metallic": 0, "roughness": 1.00, "range": [0.90, 1.00], "ior": 1.50, "f0": null, "keywords": ["velvet", "felt", "wool"]},
-    "paper / cardboard":  {"class": "fabric", "metallic": 0, "roughness": 0.90, "range": [0.80, 1.00], "ior": 1.50, "f0": null, "keywords": ["paper", "cardboard", "papier"]}
+ "about": "PBR presets for splat2mesh. metallic/roughness for UsdPreviewSurface (metallic-roughness workflow); ior for dielectrics; f0 = linear reflectance at normal incidence used as base colour for metals (values from widely used physically-based reference charts, e.g. Lagarde's and Hoffman's). roughness is a typical value for the finish named; 'range' gives the plausible span. These are catalogue values, not measurements. transmission/subsurface/thin_walled feed a MaterialX standard_surface (translucent and glass parts); UsdPreviewSurface gets opacity\u22481-0.9\u00b7transmission.",
+ "materials": {
+  "gold": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.2,
+   "range": [
+    0.05,
+    0.45
+   ],
+   "ior": null,
+   "f0": [
+    1.0,
+    0.766,
+    0.336
+   ],
+   "keywords": [
+    "gold",
+    "golden",
+    "gilt",
+    "gilded",
+    "gold leaf",
+    "kintsugi",
+    "koban"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "brass": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.25,
+   "range": [
+    0.1,
+    0.5
+   ],
+   "ior": null,
+   "f0": [
+    0.91,
+    0.778,
+    0.423
+   ],
+   "keywords": [
+    "brass"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "bronze": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.35,
+   "range": [
+    0.2,
+    0.6
+   ],
+   "ior": null,
+   "f0": [
+    0.8,
+    0.58,
+    0.38
+   ],
+   "keywords": [
+    "bronze"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "copper": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.25,
+   "range": [
+    0.1,
+    0.5
+   ],
+   "ior": null,
+   "f0": [
+    0.955,
+    0.637,
+    0.538
+   ],
+   "keywords": [
+    "copper"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "silver": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.15,
+   "range": [
+    0.05,
+    0.4
+   ],
+   "ior": null,
+   "f0": [
+    0.972,
+    0.96,
+    0.915
+   ],
+   "keywords": [
+    "silver",
+    "sterling"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "polished steel": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.15,
+   "range": [
+    0.05,
+    0.3
+   ],
+   "ior": null,
+   "f0": [
+    0.56,
+    0.57,
+    0.58
+   ],
+   "keywords": [
+    "polished steel",
+    "stainless steel",
+    "steel"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "brushed steel": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.4,
+   "range": [
+    0.3,
+    0.6
+   ],
+   "ior": null,
+   "f0": [
+    0.56,
+    0.57,
+    0.58
+   ],
+   "keywords": [
+    "brushed steel",
+    "brushed metal"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "chrome": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.05,
+   "range": [
+    0.02,
+    0.15
+   ],
+   "ior": null,
+   "f0": [
+    0.55,
+    0.556,
+    0.554
+   ],
+   "keywords": [
+    "chrome",
+    "chromed",
+    "mirror"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "aluminium": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.3,
+   "range": [
+    0.1,
+    0.6
+   ],
+   "ior": null,
+   "f0": [
+    0.913,
+    0.922,
+    0.924
+   ],
+   "keywords": [
+    "aluminium",
+    "aluminum"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "brushed aluminium": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.45,
+   "range": [
+    0.3,
+    0.65
+   ],
+   "ior": null,
+   "f0": [
+    0.913,
+    0.922,
+    0.924
+   ],
+   "keywords": [
+    "brushed aluminium",
+    "brushed aluminum"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "iron": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.5,
+   "range": [
+    0.3,
+    0.8
+   ],
+   "ior": null,
+   "f0": [
+    0.56,
+    0.57,
+    0.58
+   ],
+   "keywords": [
+    "iron",
+    "wrought iron"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "cast iron": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.7,
+   "range": [
+    0.5,
+    0.9
+   ],
+   "ior": null,
+   "f0": [
+    0.56,
+    0.57,
+    0.58
+   ],
+   "keywords": [
+    "cast iron"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "rusted iron": {
+   "class": "dielectric",
+   "metallic": 0,
+   "roughness": 0.85,
+   "range": [
+    0.7,
+    1.0
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "rust",
+    "rusted",
+    "rusty",
+    "corroded"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "titanium": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.35,
+   "range": [
+    0.15,
+    0.6
+   ],
+   "ior": null,
+   "f0": [
+    0.542,
+    0.497,
+    0.449
+   ],
+   "keywords": [
+    "titanium"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "nickel": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.25,
+   "range": [
+    0.1,
+    0.5
+   ],
+   "ior": null,
+   "f0": [
+    0.66,
+    0.609,
+    0.526
+   ],
+   "keywords": [
+    "nickel"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "platinum": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.15,
+   "range": [
+    0.05,
+    0.4
+   ],
+   "ior": null,
+   "f0": [
+    0.673,
+    0.637,
+    0.585
+   ],
+   "keywords": [
+    "platinum"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "pewter / tin": {
+   "class": "metal",
+   "metallic": 1,
+   "roughness": 0.45,
+   "range": [
+    0.3,
+    0.7
+   ],
+   "ior": null,
+   "f0": [
+    0.7,
+    0.7,
+    0.7
+   ],
+   "keywords": [
+    "pewter",
+    "tin"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "patinated bronze": {
+   "class": "dielectric",
+   "metallic": 0,
+   "roughness": 0.65,
+   "range": [
+    0.5,
+    0.85
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "patina",
+    "verdigris",
+    "patinated"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "porcelain (glazed)": {
+   "class": "ceramic",
+   "metallic": 0,
+   "roughness": 0.1,
+   "range": [
+    0.03,
+    0.2
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "porcelain",
+    "china",
+    "bone china"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.2,
+   "thin_walled": false
+  },
+  "glazed ceramic": {
+   "class": "ceramic",
+   "metallic": 0,
+   "roughness": 0.15,
+   "range": [
+    0.05,
+    0.3
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "ceramic",
+    "glaze",
+    "glazed",
+    "faience",
+    "majolica",
+    "celadon"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.1,
+   "thin_walled": false
+  },
+  "crackle glaze": {
+   "class": "ceramic",
+   "metallic": 0,
+   "roughness": 0.18,
+   "range": [
+    0.08,
+    0.3
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "crackle",
+    "craquelure"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "stoneware (matte glaze)": {
+   "class": "ceramic",
+   "metallic": 0,
+   "roughness": 0.5,
+   "range": [
+    0.35,
+    0.7
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "stoneware",
+    "matte glaze",
+    "satin glaze"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "unglazed clay / terracotta": {
+   "class": "ceramic",
+   "metallic": 0,
+   "roughness": 0.9,
+   "range": [
+    0.75,
+    1.0
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "terracotta",
+    "unglazed",
+    "bisque",
+    "earthenware",
+    "clay"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "urushi lacquer": {
+   "class": "coating",
+   "metallic": 0,
+   "roughness": 0.05,
+   "range": [
+    0.02,
+    0.15
+   ],
+   "ior": 1.52,
+   "f0": null,
+   "keywords": [
+    "urushi",
+    "japanese lacquer",
+    "lacquerware"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "gloss lacquer": {
+   "class": "coating",
+   "metallic": 0,
+   "roughness": 0.08,
+   "range": [
+    0.03,
+    0.2
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "lacquer",
+    "lacquered",
+    "piano black",
+    "high gloss"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "varnished wood": {
+   "class": "wood",
+   "metallic": 0,
+   "roughness": 0.25,
+   "range": [
+    0.1,
+    0.4
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "varnish",
+    "varnished",
+    "polished wood",
+    "french polish"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "enamel": {
+   "class": "coating",
+   "metallic": 0,
+   "roughness": 0.12,
+   "range": [
+    0.05,
+    0.25
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "enamel",
+    "enamelled",
+    "cloisonne",
+    "cloisonn\u00e9"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "gloss paint": {
+   "class": "coating",
+   "metallic": 0,
+   "roughness": 0.2,
+   "range": [
+    0.1,
+    0.35
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "gloss paint",
+    "glossy paint",
+    "painted"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "satin paint": {
+   "class": "coating",
+   "metallic": 0,
+   "roughness": 0.45,
+   "range": [
+    0.35,
+    0.6
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "satin",
+    "eggshell"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "matte paint": {
+   "class": "coating",
+   "metallic": 0,
+   "roughness": 0.8,
+   "range": [
+    0.65,
+    0.95
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "matte paint",
+    "flat paint",
+    "chalk paint"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "car paint": {
+   "class": "coating",
+   "metallic": 0,
+   "roughness": 0.1,
+   "range": [
+    0.03,
+    0.2
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "car paint",
+    "automotive paint",
+    "clear coat"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "raw wood": {
+   "class": "wood",
+   "metallic": 0,
+   "roughness": 0.7,
+   "range": [
+    0.55,
+    0.9
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "wood",
+    "wooden",
+    "pine",
+    "birch",
+    "maple",
+    "plywood",
+    "grain"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "oiled hardwood": {
+   "class": "wood",
+   "metallic": 0,
+   "roughness": 0.45,
+   "range": [
+    0.3,
+    0.6
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "walnut",
+    "oak",
+    "teak",
+    "mahogany",
+    "cherry wood",
+    "oiled",
+    "carved wood"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "bamboo / rattan": {
+   "class": "wood",
+   "metallic": 0,
+   "roughness": 0.55,
+   "range": [
+    0.4,
+    0.7
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "bamboo",
+    "rattan",
+    "wicker",
+    "cane"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "cork": {
+   "class": "wood",
+   "metallic": 0,
+   "roughness": 0.9,
+   "range": [
+    0.8,
+    1.0
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "cork"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "glossy plastic": {
+   "class": "plastic",
+   "metallic": 0,
+   "roughness": 0.2,
+   "range": [
+    0.05,
+    0.35
+   ],
+   "ior": 1.46,
+   "f0": null,
+   "keywords": [
+    "plastic",
+    "abs",
+    "acrylic",
+    "polystyrene",
+    "toy"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "matte plastic": {
+   "class": "plastic",
+   "metallic": 0,
+   "roughness": 0.6,
+   "range": [
+    0.45,
+    0.8
+   ],
+   "ior": 1.46,
+   "f0": null,
+   "keywords": [
+    "matte plastic",
+    "nylon",
+    "pla",
+    "3d printed"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "vinyl": {
+   "class": "plastic",
+   "metallic": 0,
+   "roughness": 0.35,
+   "range": [
+    0.2,
+    0.5
+   ],
+   "ior": 1.53,
+   "f0": null,
+   "keywords": [
+    "vinyl",
+    "pvc"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "rubber": {
+   "class": "plastic",
+   "metallic": 0,
+   "roughness": 0.85,
+   "range": [
+    0.7,
+    1.0
+   ],
+   "ior": 1.52,
+   "f0": null,
+   "keywords": [
+    "rubber",
+    "silicone"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "glass": {
+   "class": "transparent",
+   "metallic": 0,
+   "roughness": 0.02,
+   "range": [
+    0.0,
+    0.1
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "glass",
+    "transparent"
+   ],
+   "transmission": 1.0,
+   "subsurface": 0,
+   "thin_walled": false
+  },
+  "frosted glass": {
+   "class": "transparent",
+   "metallic": 0,
+   "roughness": 0.45,
+   "range": [
+    0.3,
+    0.6
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "frosted",
+    "sandblasted",
+    "etched glass"
+   ],
+   "transmission": 1.0,
+   "subsurface": 0,
+   "thin_walled": false
+  },
+  "crystal": {
+   "class": "transparent",
+   "metallic": 0,
+   "roughness": 0.01,
+   "range": [
+    0.0,
+    0.05
+   ],
+   "ior": 1.55,
+   "f0": null,
+   "keywords": [
+    "crystal",
+    "lead crystal"
+   ],
+   "transmission": 1.0,
+   "subsurface": 0,
+   "thin_walled": false
+  },
+  "quartz / gemstone": {
+   "class": "transparent",
+   "metallic": 0,
+   "roughness": 0.02,
+   "range": [
+    0.0,
+    0.1
+   ],
+   "ior": 1.54,
+   "f0": null,
+   "keywords": [
+    "quartz",
+    "amethyst",
+    "gem",
+    "gemstone"
+   ],
+   "transmission": 0.9,
+   "subsurface": 0,
+   "thin_walled": false
+  },
+  "diamond": {
+   "class": "transparent",
+   "metallic": 0,
+   "roughness": 0.01,
+   "range": [
+    0.0,
+    0.03
+   ],
+   "ior": 2.42,
+   "f0": null,
+   "keywords": [
+    "diamond"
+   ],
+   "transmission": 1.0,
+   "subsurface": 0,
+   "thin_walled": false
+  },
+  "polished marble": {
+   "class": "stone",
+   "metallic": 0,
+   "roughness": 0.15,
+   "range": [
+    0.05,
+    0.3
+   ],
+   "ior": 1.49,
+   "f0": null,
+   "keywords": [
+    "marble",
+    "polished stone",
+    "onyx"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.35,
+   "thin_walled": false
+  },
+  "honed stone": {
+   "class": "stone",
+   "metallic": 0,
+   "roughness": 0.6,
+   "range": [
+    0.45,
+    0.8
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "granite",
+    "slate",
+    "limestone",
+    "sandstone",
+    "stone"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "jade": {
+   "class": "stone",
+   "metallic": 0,
+   "roughness": 0.2,
+   "range": [
+    0.1,
+    0.35
+   ],
+   "ior": 1.66,
+   "f0": null,
+   "keywords": [
+    "jade",
+    "nephrite",
+    "jadeite"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.7,
+   "thin_walled": false
+  },
+  "concrete / plaster": {
+   "class": "stone",
+   "metallic": 0,
+   "roughness": 0.9,
+   "range": [
+    0.75,
+    1.0
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "concrete",
+    "plaster",
+    "cement",
+    "stucco"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "mother-of-pearl": {
+   "class": "organic",
+   "metallic": 0,
+   "roughness": 0.15,
+   "range": [
+    0.05,
+    0.3
+   ],
+   "ior": 1.53,
+   "f0": null,
+   "keywords": [
+    "mother-of-pearl",
+    "nacre",
+    "pearl",
+    "abalone"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.15,
+   "thin_walled": false
+  },
+  "bone / ivory": {
+   "class": "organic",
+   "metallic": 0,
+   "roughness": 0.4,
+   "range": [
+    0.25,
+    0.6
+   ],
+   "ior": 1.54,
+   "f0": null,
+   "keywords": [
+    "bone",
+    "ivory",
+    "horn",
+    "antler"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.3,
+   "thin_walled": false
+  },
+  "amber / resin": {
+   "class": "organic",
+   "metallic": 0,
+   "roughness": 0.08,
+   "range": [
+    0.02,
+    0.2
+   ],
+   "ior": 1.54,
+   "f0": null,
+   "keywords": [
+    "amber",
+    "resin",
+    "epoxy"
+   ],
+   "transmission": 0.6,
+   "subsurface": 0.3,
+   "thin_walled": false
+  },
+  "leather": {
+   "class": "organic",
+   "metallic": 0,
+   "roughness": 0.6,
+   "range": [
+    0.4,
+    0.8
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "leather"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "patent leather": {
+   "class": "organic",
+   "metallic": 0,
+   "roughness": 0.1,
+   "range": [
+    0.05,
+    0.2
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "patent leather"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "wax / candle": {
+   "class": "organic",
+   "metallic": 0,
+   "roughness": 0.45,
+   "range": [
+    0.3,
+    0.6
+   ],
+   "ior": 1.45,
+   "f0": null,
+   "keywords": [
+    "wax",
+    "candle",
+    "paraffin"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.8,
+   "thin_walled": false
+  },
+  "cotton / linen": {
+   "class": "fabric",
+   "metallic": 0,
+   "roughness": 0.95,
+   "range": [
+    0.85,
+    1.0
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "cotton",
+    "linen",
+    "canvas",
+    "fabric",
+    "cloth",
+    "shade"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": true
+  },
+  "silk / satin": {
+   "class": "fabric",
+   "metallic": 0,
+   "roughness": 0.4,
+   "range": [
+    0.25,
+    0.55
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "silk",
+    "satin fabric"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": true
+  },
+  "velvet / felt": {
+   "class": "fabric",
+   "metallic": 0,
+   "roughness": 1.0,
+   "range": [
+    0.9,
+    1.0
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "velvet",
+    "felt",
+    "wool"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
+  },
+  "paper / cardboard": {
+   "class": "fabric",
+   "metallic": 0,
+   "roughness": 0.9,
+   "range": [
+    0.8,
+    1.0
+   ],
+   "ior": 1.5,
+   "f0": null,
+   "keywords": [
+    "paper",
+    "cardboard",
+    "papier"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": true
   }
+ }
 }

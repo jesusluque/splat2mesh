@@ -17,7 +17,14 @@ for d in items:
     o = out / d.name / "usd"
     if not (o / "asset.usda").exists():
         r = run_direct(d / f"{d.name}.ply", o, y_down=True)
-        print(d.name, "direct", r["components"], r["non_manifold_edges"], r["uv_charts"], flush=True)
+        print(d.name, "direct", r["components"], r["non_manifold_edges"], r["uv_charts"], "folds", r["folds"], flush=True)
+        if r["folds"] > 500:                       # crumpled walls: render path (athenea) instead
+            import shutil
+            tmp = out / d.name / "render_path"
+            subprocess.run([sys.executable, str(ROOT / "scripts/splat2usd.py"), str(d / f"{d.name}.ply"), "--y-down",
+                            "--no-antialias", "--out", str(tmp)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            shutil.rmtree(o); shutil.copytree(tmp / d.name / "usd", o)
+            print(d.name, "→ render path", flush=True)
 # 2) descriptions with Qwen3-VL (one model load for all)
 need = [d for d in items if not (out / d.name / "materials.txt").exists()]
 if need:

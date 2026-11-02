@@ -252,7 +252,7 @@ def from_masks(spec_json, masks: dict, min_overlap: float = 0.15) -> dict:
     return {"regions": [(r["material"], r.get("source", "vlm"), r["share"]) for r in spec["regions"]]}
 
 
-def render_orbit(asset_dir, out_dir, n: int = 24, elevation: float = 15.0, size: int = 768):
+def render_orbit(asset_dir, out_dir, n: int = 16, elevation: float = 15.0, size: int = 768):
     """Unlit renders of the textured mesh on an orbit (a 'video' for ENEAS) + per-pixel texel index maps."""
     import open3d as o3d
     from .rerender import load_usd_textured
@@ -285,6 +285,64 @@ def render_orbit(asset_dir, out_dir, n: int = 24, elevation: float = 15.0, size:
     return out_dir
 
 
+def refine_by_regions(tex, mask, votes, spec, classes, min_share: float = 0.25):
+    """Material borders follow colour borders. In each colour region only the material classes holding at least
+    min_share of that region's votes are allowed; each texel takes the allowed part with most votes at that
+    texel (or the region's majority part when unseen). White texels cannot become gold because a phrase mask
+    spilled over them; two parts of the same colour can still keep different materials."""
+    K = votes.shape[0]
+    C = np.array([r["lab"] for r in spec["regions"]])
+    reg = ((_srgb_to_lab(tex)[..., None, :] - C[None, None]) ** 2).sum(-1).argmin(-1)
+    out = np.full(mask.shape, -1)
+    for j in range(len(C)):
+        sel = mask & (reg == j)
+        if not sel.any():
+            continue
+        v = votes[:, sel]                                   # K × n
+        per_part = v.sum(1)
+        if per_part.sum() == 0:
+            continue
+        per_cls = {}
+        for k in range(K):
+            per_cls[classes[k]] = per_cls.get(classes[k], 0) + per_part[k]
+        tot = sum(per_cls.values())
+        allowed_cls = {c for c, w in per_cls.items() if w >= min_share * tot} or {max(per_cls, key=per_cls.get)}
+        allowed = np.array([classes[k] in allowed_cls for k in range(K)])
+        vv = np.where(allowed[:, None], v, -1)
+        lab_t = vv.argmax(0)
+        unseen = v.sum(0) == 0
+        lab_t[unseen] = int(np.argmax(np.where(allowed, per_part, -1)))
+        out[sel] = lab_t
+    return out
+
+
+def refine_by_colour(tex, mask, votes, cls_tex, conf: float = 0.75, prior_w: float = 2.0):
+    """Mask votes are blocky (renders at 768 px, phrase masks spill over neighbours). Learn each class's colour
+    (Lab Gaussian) from confidently voted texels, then label every texel by colour likelihood + vote prior, so
+    material borders follow colour edges: a white porcelain texel cannot stay "gold" because a mask covered it."""
+    K = votes.shape[0]
+    lab = _srgb_to_lab(tex)
+    tot = votes.sum(0)
+    frac = votes / np.maximum(tot, 1e-6)
+    ll = np.full((K,) + mask.shape, -np.inf, np.float32)
+    for k in range(K):
+        sure = mask & (tot > 0) & (frac[k] >= conf)
+        if sure.sum() < 30:
+            continue
+        X = lab[sure]
+        mu = X.mean(0); cov = np.cov(X.T) + np.eye(3) * 4.0          # ΔE ≥ 2 floor
+        icov = np.linalg.inv(cov); _, logdet = np.linalg.slogdet(cov)
+        d = lab[mask] - mu
+        m2 = np.einsum("ni,ij,nj->n", d, icov, d)
+        prior = np.log(frac[k][mask] + 0.05) * prior_w * (tot[mask] > 0)
+        ll[k][mask] = -0.5 * (m2 + logdet) + prior
+    best = ll.argmax(0)
+    ok = np.isfinite(ll.max(0)) & mask
+    out = cls_tex.copy()
+    out[ok] = best[ok]
+    return out
+
+
 def from_view_masks(spec_json, orbit_dir, masks: dict) -> dict:
     """masks = {"class|phrase": [n_views HxW bool]}: back-project every view's masks to texels (smallest mask wins
     per pixel), vote per texel; texels no view saw take the majority class of their colour region."""
@@ -303,6 +361,7 @@ def from_view_masks(spec_json, orbit_dir, masks: dict) -> dict:
         np.add.at(votes, (label[ok], tm[ok]), 1.0)
     seen = votes.sum(0) > 0
     cls_tex = np.where(seen, votes.argmax(0), -1).reshape(R, R)
+    cls_tex = refine_by_regions(tex, mask, votes.reshape(len(names), R, R), spec, [n.split("|")[0] for n in names])
     # fill unseen texels: majority over the texel's colour region
     C = np.array([r["lab"] for r in spec["regions"]])
     reg = ((_srgb_to_lab(tex)[..., None, :] - C[None, None]) ** 2).sum(-1).argmin(-1)
@@ -349,6 +408,7 @@ def apply_texel_classes(spec_json, out_dir=None) -> dict:
     Image.fromarray((M[::-1].clip(0, 1) * 255).astype(np.uint8)).save(out_dir / "metallic.png")
     orm = np.stack([np.ones_like(R), R, M], -1)
     Image.fromarray((orm[::-1].clip(0, 1) * 255).astype(np.uint8)).save(out_dir / "orm.png")
+    res["finish"] = finish_maps(asset, cls_tex, names)
     return res
 
 
@@ -440,3 +500,104 @@ def export_parts(asset_dir, out_name: str = "asset_parts.usda", group: str = "pa
     st_out.GetRootLayer().Save()
     (asset / ("parts.json" if group == "part" else "material_groups.json")).write_text(json.dumps(parts, indent=1))
     return parts
+
+
+def _lib(cls):
+    return LIB.get(cls) or LIB.get(VLM_TO_LIB.get(cls, ""), {})
+
+
+def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
+    """Second pass over the per-texel classes: physical base colour for metals (library F0 × the texture's own
+    luminance detail, so engraving/hammering stays), transmission & subsurface maps, opacity for the preview
+    surface, and a MaterialX standard_surface next to the UsdPreviewSurface."""
+    asset = Path(asset_dir)
+    tex, mask = _texture_and_mask(asset)
+    base = np.asarray(Image.open(asset / "basecolor_delit.png").convert("RGB"), np.float32)[::-1] / 255
+    lin = lambda c: np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    srgb = lambda c: np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(np.maximum(c, 0), 1 / 2.4) - 0.055)
+    T = np.zeros(mask.shape, np.float32); S = np.zeros(mask.shape, np.float32)
+    Rmap = np.asarray(Image.open(asset / "roughness.png"), np.float32)[::-1] / 255
+    Mmap = np.asarray(Image.open(asset / "metallic.png"), np.float32)[::-1] / 255
+    info = {}
+    for i, n in enumerate(names):
+        cls = n.split("|")[0]; L = _lib(cls); sel = (cls_tex == i) & mask
+        if not sel.any():
+            continue
+        if L.get("metallic", 0) >= 0.5 and L.get("f0"):
+            lum0 = lin(base[sel]).mean(-1)
+            dark = lum0 < 0.25 * np.median(lum0)              # ink/paint/enamel on the metal: not metal
+            if dark.any():
+                ys, xs = np.nonzero(sel)
+                Mmap[ys[dark], xs[dark]] = 0.0; Rmap[ys[dark], xs[dark]] = 0.3
+                sel = sel.copy(); sel[ys[dark], xs[dark]] = False
+            lum = lin(base[sel]).mean(-1)
+            # polished metals: the baked colour is frozen reflections → library colour only; matte metals keep a
+            # little of the texture's detail (hammering, engraving)
+            exp = 0.0 if L.get("roughness", 0.3) < 0.3 else metal_detail
+            detail = (lum / max(np.median(lum), 1e-4)) ** exp
+            f0 = np.array(L["f0"], np.float32)
+            detail = np.clip(detail, 0.6, 1.0 / f0.max())        # keep the hue: never push a channel past 1
+            base[sel] = srgb(f0[None] * detail[:, None])
+        if L.get("transmission", 0) > 0:      # glass: what the splat shows is the background seen through it
+            tint = np.median(lin(base[sel]), 0)
+            tint = tint / max(tint.max(), 1e-4) * 0.95            # keep the hue, drop the frozen brightness
+            base[sel] = srgb(tint)[None]
+        T[sel] = L.get("transmission", 0.0); S[sel] = L.get("subsurface", 0.0)
+        info[cls] = {"transmission": L.get("transmission", 0.0), "subsurface": L.get("subsurface", 0.0),
+                     "thin_walled": L.get("thin_walled", False), "ior": L.get("ior")}
+    from .texture import inpaint
+    for name, img in (("transmission", T), ("subsurface", S)):
+        Image.fromarray((img[::-1].clip(0, 1) * 255).astype(np.uint8)).save(asset / f"{name}.png")
+    Image.fromarray(((1 - 0.85 * T)[::-1].clip(0, 1) * 255).astype(np.uint8)).save(asset / "opacity.png")
+    for name, img in (("roughness", Rmap), ("metallic", Mmap)):
+        Image.fromarray((img[::-1].clip(0, 1) * 255).astype(np.uint8)).save(asset / f"{name}.png")
+    Image.fromarray((np.stack([np.ones_like(Rmap), Rmap, Mmap], -1)[::-1].clip(0, 1) * 255).astype(np.uint8)).save(asset / "orm.png")
+    Image.fromarray((base[::-1].clip(0, 1) * 255).astype(np.uint8)).save(asset / "basecolor_delit.png")
+    has_t, has_s = bool((T > 0).any()), bool((S > 0).any())
+    iors = [v["ior"] for v in info.values() if v["ior"]]
+    _usd_add_mtlx(asset / "asset.usda", has_t, has_s, ior=float(np.median(iors)) if iors else 1.5,
+                  thin=any(v["thin_walled"] and v["transmission"] > 0 for v in info.values()))
+    return {"transmissive": has_t, "subsurface": has_s, "classes": info}
+
+
+def _usd_add_mtlx(usd_path: Path, has_t: bool, has_s: bool, ior: float = 1.5, thin: bool = False):
+    """MaterialX standard_surface (render context 'mtlx') beside the UsdPreviewSurface; same textures."""
+    from pxr import Sdf, Usd, UsdShade
+    stage = Usd.Stage.Open(str(usd_path))
+    mat_prim = next(p for p in stage.Traverse() if p.GetTypeName() == "Material")
+    mp = mat_prim.GetPath(); mat = UsdShade.Material(mat_prim)
+    pbr = UsdShade.Shader(stage.GetPrimAtPath(mp.AppendChild("PreviewSurface")))
+    if has_t:                                     # preview surface: per-texel opacity + ior
+        t = UsdShade.Shader.Define(stage, mp.AppendChild("Opacity")); t.CreateIdAttr("UsdUVTexture")
+        t.CreateInput("file", Sdf.ValueTypeNames.Asset).Set("./opacity.png")
+        t.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set("raw")
+        rd = UsdShade.Shader(stage.GetPrimAtPath(mp.AppendChild("stReader")))
+        t.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(rd.ConnectableAPI(), "result")
+        t.CreateOutput("r", Sdf.ValueTypeNames.Float)
+        pbr.CreateInput("opacity", Sdf.ValueTypeNames.Float).ConnectToSource(t.ConnectableAPI(), "r")
+        pbr.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(ior)
+    ng = mp.AppendChild("MtlxGraph")
+    def img(name, file, typ="float"):
+        s = UsdShade.Shader.Define(stage, ng.AppendChild(name))
+        s.CreateIdAttr(f"ND_image_{typ}")
+        fi = s.CreateInput("file", Sdf.ValueTypeNames.Asset); fi.Set(file)
+        fi.GetAttr().SetColorSpace("srgb_texture" if typ == "color3" else "raw")
+        out = s.CreateOutput("out", Sdf.ValueTypeNames.Color3f if typ == "color3" else Sdf.ValueTypeNames.Float)
+        return s
+    ss = UsdShade.Shader.Define(stage, mp.AppendChild("StandardSurface")); ss.CreateIdAttr("ND_standard_surface_surfaceshader")
+    bc = img("base_color", "./basecolor_delit.png", "color3")
+    ss.CreateInput("base_color", Sdf.ValueTypeNames.Color3f).ConnectToSource(bc.ConnectableAPI(), "out")
+    ss.CreateInput("base", Sdf.ValueTypeNames.Float).Set(1.0)
+    for inp, f in (("specular_roughness", "./roughness.png"), ("metalness", "./metallic.png")):
+        ss.CreateInput(inp, Sdf.ValueTypeNames.Float).ConnectToSource(img(inp, f).ConnectableAPI(), "out")
+    ss.CreateInput("specular_IOR", Sdf.ValueTypeNames.Float).Set(ior)
+    if has_t:
+        ss.CreateInput("transmission", Sdf.ValueTypeNames.Float).ConnectToSource(img("transmission", "./transmission.png").ConnectableAPI(), "out")
+        ss.CreateInput("thin_walled", Sdf.ValueTypeNames.Bool).Set(bool(thin))
+    if has_s:
+        ss.CreateInput("subsurface", Sdf.ValueTypeNames.Float).ConnectToSource(img("subsurface", "./subsurface.png").ConnectableAPI(), "out")
+        ss.CreateInput("subsurface_color", Sdf.ValueTypeNames.Color3f).ConnectToSource(bc.ConnectableAPI(), "out")
+        ss.CreateInput("subsurface_radius", Sdf.ValueTypeNames.Color3f).Set((1.0, 0.6, 0.4))
+    ss.CreateOutput("out", Sdf.ValueTypeNames.Token)
+    mat.CreateSurfaceOutput("mtlx").ConnectToSource(ss.ConnectableAPI(), "out")
+    stage.GetRootLayer().Save()

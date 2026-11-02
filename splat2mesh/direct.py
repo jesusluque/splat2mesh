@@ -97,26 +97,32 @@ def extract(occ, lo, step, level: float = 0.5, close_iters: int = 3, blur: float
     return trimesh.Trimesh(v, f[:, ::-1], process=True)
 
 
-def bake_direct(pos, nrm, mask, xyz, inv, alpha, rgb, k: int = 16):
-    """Texel colour from nearby gaussians: weight = α·G(texel) · exp(-(signed depth below surface)/h)."""
-    P = pos[mask].astype(np.float64)
-    N = nrm[mask].astype(np.float64)
+def bake_direct(pos, nrm, mask, xyz, inv, alpha, rgb, k: int = 12, chunk: int = 400_000):
+    """Texel colour from nearby gaussians: weight = α·G(texel) · exp(-(signed depth below surface)/h).
+    Processed in chunks so 4096² atlases stay within a few GB."""
+    P_all = pos[mask].astype(np.float64)
+    N_all = nrm[mask].astype(np.float64)
     tree = cKDTree(xyz)
-    dist, idx = tree.query(P, k=k, workers=-1)
-    h = np.median(dist[:, 0]) * 2 + 1e-12
-    d = xyz[idx] - P[:, None, :]                                   # texel → gaussian
-    m = np.einsum("tki,tkij,tkj->tk", d, inv[idx], d)
-    depth_below = -np.einsum("tki,ti->tk", d, N)                   # > 0: gaussian under the surface
-    w = alpha[idx] * np.exp(-0.5 * np.minimum(m, 50)) * np.exp(-np.maximum(depth_below, 0) / h)
-    w += 1e-12 * np.exp(-dist / h)                                 # fallback: nearest colour
-    col = (w[..., None] * rgb[idx]).sum(1) / w.sum(1, keepdims=True)
+    h = None
+    cols = np.zeros((len(P_all), 3), np.float32)
+    for a in range(0, len(P_all), chunk):
+        P, N = P_all[a:a + chunk], N_all[a:a + chunk]
+        dist, idx = tree.query(P, k=k, workers=-1)
+        if h is None:
+            h = np.median(dist[:, 0]) * 2 + 1e-12
+        d = xyz[idx] - P[:, None, :]
+        m = np.einsum("tki,tkij,tkj->tk", d, inv[idx], d)
+        depth_below = -np.einsum("tki,ti->tk", d, N)
+        w = alpha[idx] * np.exp(-0.5 * np.minimum(m, 50)) * np.exp(-np.maximum(depth_below, 0) / h)
+        w += 1e-12 * np.exp(-dist / h)
+        cols[a:a + chunk] = (w[..., None] * rgb[idx]).sum(1) / w.sum(1, keepdims=True)
     res = pos.shape[0]
     tex = np.zeros((res, res, 3), np.float32)
-    tex[mask] = col.astype(np.float32)
+    tex[mask] = cols
     return tex, mask.copy()
 
 
-def run_direct(ply, out: Path, faces: int = 20000, tex_res: int = 2048, y_down: bool = False,
+def run_direct(ply, out: Path, faces: int = 80000, tex_res: int = 4096, y_down: bool = False,
                res: int = 448, level: float = 0.15, smooth: float = 0.0, blur: float = 1.2) -> dict:
     from PIL import Image
     from . import geometry, texture
