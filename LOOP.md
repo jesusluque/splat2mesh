@@ -22,3 +22,9 @@ Test set: porcelain, metal, wood, lacquer, mixes. GPU on the Mac only through sh
   img2img (start from base at σ): σ=0.833 edge-SSIM 0.89, σ=0.625 0.96, but lighting barely changes (Δlum 0.01–0.02).
   Turbo's 4-step schedule leaves no middle ground at 0.833→0.625. Next: σ=0.938, embedding mix, and "flat lighting/no
   highlights" variant as a delit albedo candidate.
+- 19:55 Test set (Iris local, seed 11, white bg): porcelain teapot, brass candlestick, walnut owl, red lacquer bowl,
+  mixed lamp (oak/steel/porcelain), black lacquer box (brass, nacre), aluminium robot, celadon crackle vase with kintsugi.
+- 20:05 UV sweep on direct cat mesh (scripts/uv_sweep.py): xatlas defaults 103 charts, util 0.57, stretch σlog 0.096;
+  max_cost ≥ 4 → 109 charts, stretch 0.081 (slightly better); other weights worse. Chart count is already low on the
+  smooth direct mesh: the big UV win came from the clean decimated shell, not from xatlas tuning.
+- User: commit + push as we go.
