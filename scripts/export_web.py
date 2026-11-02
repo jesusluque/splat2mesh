@@ -48,6 +48,13 @@ def make_usdz(src: Path, dst: Path) -> dict:
 
 
 out = Path(sys.argv[1]); (out / "models").mkdir(parents=True, exist_ok=True)
+HDRS = [("Studio", "studio_small_09"), ("Photo studio", "brown_photostudio_02"), ("Sunset", "venice_sunset"),
+        ("Sky", "kloofendal_48d_partly_cloudy_puresky")]           # CC0, polyhaven.com, 1k
+hdr_src = Path(__file__).resolve().parents[1] / "out" / "hdri"
+(out / "hdri").mkdir(exist_ok=True)
+for _, h in HDRS:
+    if (hdr_src / f"{h}.hdr").exists():
+        shutil.copy(hdr_src / f"{h}.hdr", out / "hdri" / f"{h}.hdr")
 cards = []
 for spec in sys.argv[2:]:
     name, rest = spec.split("=", 1)
@@ -99,28 +106,39 @@ article {{ background:var(--card); border:1px solid var(--line); border-radius:1
 .meta {{ display:flex; gap:12px; padding:12px 14px; align-items:flex-start }} .src {{ width:64px; height:64px; object-fit:cover; border-radius:8px; border:1px solid var(--line) }}
 h2 {{ font-size:16px; margin:0 0 2px }} .meta p {{ margin:0; color:var(--muted); font-size:13px }} .dl a {{ color:var(--accent) }}
 footer {{ color:var(--muted); font-size:13px; padding:16px; max-width:1200px; margin:auto }}
+.hdr {{ margin-top:10px !important }} .hdr button {{ font:inherit; font-size:13px; padding:4px 10px; margin:2px; border-radius:20px;
+  border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer }} .hdr button.on {{ background:var(--accent); color:#fff; border-color:var(--accent) }}
 </style></head><body>
 <header><h1>splat2mesh</h1>
 <p>3D Gaussian splats → UV-textured <b>USD</b> meshes. Image → <b>Idol</b> splat → <b>splat2mesh</b>. Each viewer below renders the USDZ
-itself (three.js USDZLoader); on iPhone/iPad the AR link opens it in Quick Look. <a href="https://github.com/jesusluque/splat2mesh">Code (Apache-2.0)</a></p></header>
+itself (three.js USDZLoader); on iPhone/iPad the AR link opens it in Quick Look. <a href="https://github.com/jesusluque/splat2mesh">Code (Apache-2.0)</a></p>
+<p class="hdr">Lighting: {" ".join(f'<button data-hdr="{h}">{t}</button>' for t, h in HDRS)} <button data-hdr="auto" class="on">Cycle</button></p></header>
 <main>
 {chr(10).join(items)}
 </main>
 <footer>Models marked “PBR materials” carry inferred roughness/metallic maps (Qwen3-VL); the others are baked colour only.
-Generated with Iris-3B Turbo / Idol (speridlabs) and splat2mesh.</footer>
+Generated with Iris-3B Turbo / Idol (speridlabs) and splat2mesh. HDRIs: Poly Haven (CC0).</footer>
 <script type="module">
 import * as THREE from "three";
 import {{ USDZLoader }} from "three/addons/loaders/USDZLoader.js";
 import {{ OrbitControls }} from "three/addons/controls/OrbitControls.js";
-import {{ RoomEnvironment }} from "three/addons/environments/RoomEnvironment.js";
+import {{ RGBELoader }} from "three/addons/loaders/RGBELoader.js";
 const loader = new USDZLoader();
+const HDRS = {json.dumps([h for _, h in HDRS])};
+const hdrCache = {{}};   // name → Promise<DataTexture>
+const loadHdr = (n) => hdrCache[n] ??= new RGBELoader().loadAsync(`hdri/${{n}}.hdr`).then(t => {{ t.mapping = THREE.EquirectangularReflectionMapping; return t; }});
+const viewers = [];
 function view(el) {{
   const msg = document.createElement("div"); msg.className = "msg"; msg.textContent = "loading USDZ…"; el.appendChild(msg);
   const r = new THREE.WebGLRenderer({{ antialias: true, alpha: true }});
   r.setPixelRatio(Math.min(devicePixelRatio, 2)); r.toneMapping = THREE.ACESFilmicToneMapping; r.outputColorSpace = THREE.SRGBColorSpace;
   el.appendChild(r.domElement);
   const scene = new THREE.Scene();
-  scene.environment = new THREE.PMREMGenerator(r).fromScene(new RoomEnvironment(), 0.04).texture;
+  const pm = new THREE.PMREMGenerator(r);
+  const setHdr = async (n) => {{ const t = await loadHdr(n); const env = pm.fromEquirectangular(t).texture;
+    if (scene.environment) scene.environment.dispose(); scene.environment = env; scene.background = env;
+    scene.backgroundBlurriness = 0.6; scene.backgroundIntensity = 0.6; }};
+  viewers.push(setHdr); setHdr(HDRS[0]);
   const cam = new THREE.PerspectiveCamera(30, 1, 0.01, 50);
   const ctl = new OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.autoRotate = true; ctl.autoRotateSpeed = 1.2;
   const resize = () => {{ const w = el.clientWidth, h = el.clientHeight; r.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix(); }};
@@ -135,6 +153,10 @@ function view(el) {{
   r.setAnimationLoop(() => {{ if (!visible) return; ctl.update(); r.render(scene, cam); }});
 }}
 document.querySelectorAll(".view").forEach(view);
+let cur = 0, auto = true;
+const pick = (n) => {{ viewers.forEach(f => f(n)); document.querySelectorAll(".hdr button").forEach(b => b.classList.toggle("on", b.dataset.hdr === (auto ? "auto" : n))); }};
+document.querySelectorAll(".hdr button").forEach(b => b.onclick = () => {{ auto = b.dataset.hdr === "auto"; if (!auto) pick(b.dataset.hdr); else pick(HDRS[cur]); }});
+setInterval(() => {{ if (auto) {{ cur = (cur + 1) % HDRS.length; pick(HDRS[cur]); }} }}, 8000);
 </script>
 </body></html>
 ''')

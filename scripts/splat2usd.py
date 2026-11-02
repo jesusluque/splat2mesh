@@ -77,10 +77,14 @@ def process(inp: Path, out_root: Path, a) -> dict:
             rep["mesh"] = run_direct(ply, work / "usd", faces=a.faces, tex_res=a.tex, y_down=y_down,
                                      smooth=a.smooth)
             m = rep["mesh"]
-            rep["ok"] = m["boundary_edges"] == 0 and m["non_manifold_edges"] <= 200
-            rep["t_total_s"] = round(time.time() - t0, 1)
-            (work / "report.json").write_text(json.dumps(rep, indent=2))
-            return rep
+            if m.get("folds", 0) <= a.max_folds:
+                rep["ok"] = m["boundary_edges"] == 0 and m["non_manifold_edges"] <= 200
+                rep["t_total_s"] = round(time.time() - t0, 1)
+                (work / "report.json").write_text(json.dumps(rep, indent=2))
+                return rep
+            # crumpled surface (flat walls the opacity field cannot hold, e.g. black lacquer boxes): render path
+            print(f"    direct mode: {m['folds']} folds > {a.max_folds} → falling back to the render path", flush=True)
+            rep["direct_rejected"] = {k: m[k] for k in ("folds", "uv_charts", "components")}
         views_dir = work / "render"
         cams = [PY, str(ROOT / "scripts/athenea_cams.py"), str(ply), str(views_dir)] + (["--rotate-x-180"] if y_down else [])
         sh(cams)
@@ -131,6 +135,8 @@ def main():
     ap.add_argument("--smooth", type=float, default=0.0, help="Taubin smoothing factor X (0 off, 1 = 10 it.; glass: 3+)")
     ap.add_argument("--direct", action="store_true",
                     help="no render: mesh from the splat's opacity field (~1 min; good on Idol splats, poor on thin surface splats)")
+    ap.add_argument("--max-folds", type=int, default=150,
+                    help="--direct: above this many folded edges (dihedral > 120°) use the render path instead")
     ap.add_argument("--gaussians", type=int, default=262144)
     ap.add_argument("--y-down", action="store_true", help=".ply input is Y-down (COLMAP/Idol)")
     ap.add_argument("--y-up", action="store_true", help="override: Idol output already Y-up")

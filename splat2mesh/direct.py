@@ -117,7 +117,7 @@ def bake_direct(pos, nrm, mask, xyz, inv, alpha, rgb, k: int = 16):
 
 
 def run_direct(ply, out: Path, faces: int = 20000, tex_res: int = 2048, y_down: bool = False,
-               res: int = 320, level: float = 0.15, smooth: float = 0.0, blur: float = 1.2) -> dict:
+               res: int = 448, level: float = 0.15, smooth: float = 0.0, blur: float = 1.2) -> dict:
     from PIL import Image
     from . import geometry, texture
     from .usd_export import write_usd

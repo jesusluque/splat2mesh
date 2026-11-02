@@ -55,3 +55,18 @@ Test set: porcelain, metal, wood, lacquer, mixes. GPU on the Mac only through sh
   Fixed: annotation frame chosen by colour match of object crops (front = frame 6). Rerunning.
 - Test set v3 (level 0.15): owl and lamp base fixed; published (web v3). VLM labels still wrong for owl (no wood) and
   black lacquer box (→ gold): cases for ENEAS 3D with a description.
+
+## /loop 2 — until 06:00 (set 21:15)
+Complete, coherent result with the segmentation flow (ENEAS 3D / Qwen3-VL); more test objects if we run out. At the end:
+USDZ for every model, everything committed + pushed, complete tutorial, and an artifact for a LinkedIn post with video.
+- 21:35 Qwen3-VL writes per-part material descriptions from image + Iris prompt using library names
+  (scripts/describe_materials.py): owl → varnished wood, box → urushi + mother-of-pearl + brass, lamp → wood/steel/glazed.
+- ENEAS 3D on cat with the front annotation frame: bell, coin, collar (all 24 views), ears coherent; "golden flower
+  branches" → red flowers; "body" → lower body only. Texel share porcelain 68 %, gold 22 %, lacquer 9.5 %.
+- Qwen3-VL direct PBR numbers (scripts/qwen_pbr_probe.py): stereotyped (#d4af37 for any gold, #ffffff), unstable
+  between crops, red collar → gold metal / white ceramic, glazed porcelain roughness 0.7–0.8. Not usable → numbers
+  stay from the library, colour from the measured texture.
+- 21:55 Lamp fixed at grid 448 (v4). Lacquer box breaks in direct mode (walls caved, 710 folds; blur 2.0 does not
+  help) → automatic fallback: --direct uses the render path when folds > 150 (others: 4–18). Box → render path.
+- Toaster and car images regenerated (seed 47) before Idol reached them.
+- Web viewer: 4 CC0 Poly Haven HDRIs (studio, photo studio, sunset, sky), buttons + auto-cycle every 8 s.
