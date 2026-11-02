@@ -158,21 +158,26 @@ def _usd_add_maps(usd_path: Path, maps_dir: Path):
     stage.GetRootLayer().Save()
 
 
-# prompt words → material classes of scripts/material_vlm_yesno.py (the text an image came from is a prior)
-KEYWORDS = {
-    "gold metal": ["gold", "brass", "bronze", "copper", "gilt", "kintsugi", "koban"],
-    "silver metal": ["silver", "steel", "chrome", "aluminium", "aluminum", "iron", "tin", "metal", "pewter"],
-    "wood": ["wood", "wooden", "walnut", "oak", "maple", "pine", "teak", "cherry wood", "bamboo", "grain"],
-    "lacquer": ["lacquer", "lacquered", "urushi", "varnish", "enamel", "glossy paint"],
-    "glazed ceramic": ["porcelain", "ceramic", "glaze", "glazed", "celadon", "stoneware", "faience"],
-    "painted plastic": ["plastic", "painted", "vinyl", "toy"],
-    "matte": ["fabric", "cloth", "linen", "felt", "rubber", "unglazed", "bisque", "shade", "paper"],
-    "glass": ["glass", "crystal"],
-    "mother-of-pearl": ["mother-of-pearl", "nacre", "pearl"],
-}
-PRESET = {"gold metal": (1.0, 0.25), "silver metal": (1.0, 0.30), "wood": (0.0, 0.6), "lacquer": (0.0, 0.08),
-          "glazed ceramic": (0.0, 0.12), "painted plastic": (0.0, 0.35), "matte": (0.0, 0.85), "glass": (0.0, 0.03),
-          "mother-of-pearl": (0.0, 0.2)}
+# material library (splat2mesh/material_library.json): name → metallic, roughness, ior, f0, keywords
+LIB = json.loads((Path(__file__).with_name("material_library.json")).read_text())["materials"]
+# the coarse classes the VLM yes/no probe answers → a library entry
+VLM_TO_LIB = {"gold metal": "gold", "silver metal": "aluminium", "wood": "oiled hardwood", "lacquer": "gloss lacquer",
+              "glazed ceramic": "glazed ceramic", "painted plastic": "glossy plastic", "matte": "matte paint",
+              "glass": "glass", "mother-of-pearl": "mother-of-pearl"}
+PRESET = {k: (float(v["metallic"]), float(v["roughness"])) for k, v in LIB.items()}
+PRESET.update({k: PRESET[v] for k, v in VLM_TO_LIB.items()})
+KEYWORDS = {k: v["keywords"] for k, v in LIB.items()}
+
+
+def lookup(text: str):
+    """Best library entry for a phrase: the longest keyword found wins ('brushed steel' beats 'steel')."""
+    import re
+    t = text.lower(); best, blen = None, 0
+    for name, ws in KEYWORDS.items():
+        for w in ws:
+            if len(w) > blen and re.search(r"\b" + re.escape(w) + r"\b", t):
+                best, blen = name, len(w)
+    return best
 
 
 def decide(spec_json, mentioned_weight: float = 1.0, other_weight: float = 0.25) -> dict:
@@ -181,7 +186,14 @@ def decide(spec_json, mentioned_weight: float = 1.0, other_weight: float = 0.25)
     import re
     p = Path(spec_json); spec = json.loads(p.read_text())
     text = spec.get("prompt", "").lower()
-    named = {k for k, ws in KEYWORDS.items() if any(re.search(r"\b" + re.escape(w) + r"\b", text) for w in ws)}
+    lib_named = {k for k, ws in KEYWORDS.items() if any(re.search(r"\b" + re.escape(w) + r"\b", text) for w in ws)}
+    lib_to_vlm = {}
+    for v, l in VLM_TO_LIB.items():
+        lib_to_vlm.setdefault(LIB[l]["class"], set()).add(v)
+    named = set()
+    for l in lib_named:                       # a named library material enables the VLM classes of its family
+        named |= lib_to_vlm.get(LIB[l]["class"], set())
+        named |= {v for v, ll in VLM_TO_LIB.items() if ll == l}
     for r in spec["regions"]:
         ys = r.get("yes_scores")
         if not ys:
@@ -204,9 +216,7 @@ def parse_description(desc: str) -> list[tuple[str, str]]:
             continue
         mat, things = part.split(":", 1)
         m = mat.strip().lower()
-        cls = next((k for k, ws in KEYWORDS.items() if any(re.search(r"\b" + re.escape(w) + r"\b", m) for w in ws)), None)
-        if cls is None:
-            cls = m if m in PRESET else "glazed ceramic"
+        cls = m if m in LIB else (lookup(m) or "glazed ceramic")
         for t in things.split(","):
             if t.strip():
                 out.append((cls, t.strip()))
@@ -240,3 +250,94 @@ def from_masks(spec_json, masks: dict, min_overlap: float = 0.15) -> dict:
             r.update(material=cls, metallic=PRESET[cls][0], roughness=PRESET[cls][1], source="mask", mask=best)
     p.write_text(json.dumps(spec, indent=1))
     return {"regions": [(r["material"], r.get("source", "vlm"), r["share"]) for r in spec["regions"]]}
+
+
+def render_orbit(asset_dir, out_dir, n: int = 24, elevation: float = 15.0, size: int = 768):
+    """Unlit renders of the textured mesh on an orbit (a 'video' for ENEAS) + per-pixel texel index maps."""
+    import open3d as o3d
+    from .rerender import load_usd_textured
+    asset_dir, out_dir = Path(asset_dir), Path(out_dir)
+    (out_dir / "frames").mkdir(parents=True, exist_ok=True)
+    V, F, st, tex = load_usd_textured(str(asset_dir / "asset.usda"))
+    R = tex.shape[0]
+    lo, hi = V.min(0), V.max(0); c = (lo + hi) / 2; rad = np.linalg.norm(hi - lo) / 2
+    sc = o3d.t.geometry.RaycastingScene(); sc.add_triangles(V.astype(np.float32), F.astype(np.uint32))
+    f = size / 2 / np.tan(np.radians(15)); dist = rad / np.sin(np.radians(15)) * 1.1
+    u, v = np.meshgrid(np.arange(size) + .5, np.arange(size) + .5)
+    texel_maps = []
+    for i in range(n):
+        a, e = 2 * np.pi * i / n, np.radians(elevation)
+        eye = c + dist * np.array([np.sin(a) * np.cos(e), np.sin(e), np.cos(a) * np.cos(e)])
+        fw = c - eye; fw /= np.linalg.norm(fw); rt = np.cross(fw, [0, 1, 0]); rt /= np.linalg.norm(rt); dn = np.cross(fw, rt)
+        d = np.stack([(u - size / 2) / f, (v - size / 2) / f, np.ones_like(u)], -1) @ np.stack([rt, dn, fw])
+        res = sc.cast_rays(o3d.core.Tensor(np.concatenate([np.broadcast_to(eye, d.shape), d], -1).reshape(-1, 6).astype(np.float32)))
+        pid = res["primitive_ids"].numpy().reshape(size, size); bu = res["primitive_uvs"].numpy().reshape(size, size, 2)
+        hit = pid != o3d.t.geometry.RaycastingScene.INVALID_ID
+        ff = F[pid[hit]]; b1, b2 = bu[hit, 0:1], bu[hit, 1:2]
+        uvp = st[ff[:, 0]] * (1 - b1 - b2) + st[ff[:, 1]] * b1 + st[ff[:, 2]] * b2
+        px = np.clip((uvp * R).astype(int), 0, R - 1)
+        img = np.full((size, size, 3), 1.0, np.float32)            # white background, as Idol likes
+        img[hit] = tex[px[:, 1], px[:, 0]]
+        tmap = np.full((size, size), -1, np.int64); tmap[hit] = px[:, 1] * R + px[:, 0]
+        Image.fromarray((img.clip(0, 1) * 255).astype(np.uint8)).save(out_dir / "frames" / f"frame_{i:04d}.jpg", quality=95)
+        texel_maps.append(tmap)
+    np.save(out_dir / "texel_maps.npy", np.stack(texel_maps))
+    return out_dir
+
+
+def from_view_masks(spec_json, orbit_dir, masks: dict) -> dict:
+    """masks = {"class|phrase": [n_views HxW bool]}: back-project every view's masks to texels (smallest mask wins
+    per pixel), vote per texel; texels no view saw take the majority class of their colour region."""
+    spec_p = Path(spec_json); spec = json.loads(spec_p.read_text())
+    tmaps = np.load(Path(orbit_dir) / "texel_maps.npy")
+    tex, mask = _texture_and_mask(Path(spec["asset"]))
+    R = tex.shape[0]
+    names = list(masks)
+    votes = np.zeros((len(names), R * R), np.float32)
+    for vi in range(tmaps.shape[0]):
+        tm = tmaps[vi]
+        label = np.full(tm.shape, -1)
+        for i in sorted(range(len(names)), key=lambda i: -masks[names[i]][vi].sum()):
+            label[masks[names[i]][vi]] = i
+        ok = (tm >= 0) & (label >= 0)
+        np.add.at(votes, (label[ok], tm[ok]), 1.0)
+    seen = votes.sum(0) > 0
+    cls_tex = np.where(seen, votes.argmax(0), -1).reshape(R, R)
+    # fill unseen texels: majority over the texel's colour region
+    C = np.array([r["lab"] for r in spec["regions"]])
+    reg = ((_srgb_to_lab(tex)[..., None, :] - C[None, None]) ** 2).sum(-1).argmin(-1)
+    for j in range(len(C)):
+        sel = mask & (reg == j)
+        known = cls_tex[sel]; known = known[known >= 0]
+        if len(known):
+            maj = np.bincount(known, minlength=len(names)).argmax()
+            fill = sel & (cls_tex < 0)
+            cls_tex[fill] = maj
+    out = Path(spec["asset"])
+    classes = [n.split("|")[0] for n in names]
+    np.save(out / "mat" / "texel_class.npy", cls_tex)
+    spec["texel_classes"] = names
+    spec_p.write_text(json.dumps(spec, indent=1))
+    share = {n: round(float((cls_tex[mask] == i).mean()), 4) for i, n in enumerate(names)}
+    return {"seen_texels": round(float(seen.reshape(R, R)[mask].mean()), 3), "share": share, "classes": classes}
+
+
+def apply_texel_classes(spec_json, out_dir=None) -> dict:
+    """Roughness/metallic maps from the per-texel classes of from_view_masks (falls back to regions where unknown)."""
+    spec = json.loads(Path(spec_json).read_text())
+    asset = Path(spec["asset"]); out_dir = Path(out_dir or asset)
+    res = apply(spec_json, out_dir)                      # region-based maps + de-lit base colour as the fallback
+    cls_tex = np.load(asset / "mat" / "texel_class.npy")
+    names = spec["texel_classes"]
+    R = np.asarray(Image.open(out_dir / "roughness.png"), np.float32)[::-1] / 255
+    M = np.asarray(Image.open(out_dir / "metallic.png"), np.float32)[::-1] / 255
+    for i, n in enumerate(names):
+        cls = n.split("|")[0]
+        sel = cls_tex == i
+        R[sel] = PRESET[cls][1]; M[sel] = PRESET[cls][0]
+    R = ndi.median_filter(R, 3); M = ndi.median_filter(M, 3)
+    Image.fromarray((R[::-1].clip(0, 1) * 255).astype(np.uint8)).save(out_dir / "roughness.png")
+    Image.fromarray((M[::-1].clip(0, 1) * 255).astype(np.uint8)).save(out_dir / "metallic.png")
+    orm = np.stack([np.ones_like(R), R, M], -1)
+    Image.fromarray((orm[::-1].clip(0, 1) * 255).astype(np.uint8)).save(out_dir / "orm.png")
+    return res
