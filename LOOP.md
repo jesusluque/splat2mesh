@@ -28,3 +28,8 @@ Test set: porcelain, metal, wood, lacquer, mixes. GPU on the Mac only through sh
   max_cost ≥ 4 → 109 charts, stretch 0.081 (slightly better); other weights worse. Chart count is already low on the
   smooth direct mesh: the big UV win came from the clean decimated shell, not from xatlas tuning.
 - User: commit + push as we go.
+- 20:15 Owl (walnut, carved): 1284 charts. 773 charts have ≤4 faces: xatlas cuts at folds (981 dihedral angles >120°)
+  of a crumpled surface. Smoothed-proxy unwrapping: barely fewer charts, stretch explodes (rejected). Blurring the
+  solid before marching cubes removes folds: cat blur 0.8→1.2: folds 34→6, charts 108→65, PSNR 27.05→26.86.
+  New default blur 1.2. Owl at 1.2: 990 charts (real carved detail). xatlas max_cost 4 was worse inside the pipeline
+  (308 vs 108 charts on the cat; the uv_sweep ran on a seam-split mesh) → back to xatlas defaults.

@@ -37,7 +37,7 @@ def unwrap(tm: trimesh.Trimesh, resolution: int, padding: int = 4):
         po.bilinear = True
         po.texels_per_unit = float(np.sqrt(fill * resolution ** 2 / area))
         co = xatlas.ChartOptions()
-        co.max_cost = 4.0          # uv_sweep: lower stretch (σlog 0.096 → 0.081) at the same chart count
+        # xatlas defaults: max_cost 4 tested worse inside the pipeline (308 vs 108 charts on the cat)
         atlas.generate(co, po)
         if atlas.atlas_count == 1 or fill < 0.05:
             break

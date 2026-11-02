@@ -73,7 +73,7 @@ def opacity_field(xyz, scale, inv, alpha, res: int = 320, pad: float = 0.05, max
     return occ, lo, step
 
 
-def extract(occ, lo, step, level: float = 0.5, close_iters: int = 3) -> trimesh.Trimesh:
+def extract(occ, lo, step, level: float = 0.5, close_iters: int = 3, blur: float = 0.8) -> trimesh.Trimesh:
     """Solid = (occ > level), closed (bridges gaps between flat gaussians), interior cavities filled,
     only the largest connected solid kept; the surface is taken on a lightly blurred solid so it stays
     smooth, then marching cubes. Result: one closed shell."""
@@ -89,7 +89,7 @@ def extract(occ, lo, step, level: float = 0.5, close_iters: int = 3) -> trimesh.
         sizes = ndi.sum(solid, lab, range(1, n + 1))
         keep = np.nonzero(sizes >= 0.02 * sizes.max())[0] + 1      # main pieces, not specks
         solid = np.isin(lab, keep)
-    field = ndi.gaussian_filter(solid.astype(np.float32), 0.8)
+    field = ndi.gaussian_filter(solid.astype(np.float32), blur)
     if field.max() < 0.55:          # thin shell that could not be filled (open surface splat): no blur
         field = solid.astype(np.float32)
     v, f, _, _ = marching_cubes(np.pad(field, 2), 0.5)
@@ -117,7 +117,7 @@ def bake_direct(pos, nrm, mask, xyz, inv, alpha, rgb, k: int = 16):
 
 
 def run_direct(ply, out: Path, faces: int = 20000, tex_res: int = 2048, y_down: bool = False,
-               res: int = 320, level: float = 0.5, smooth: float = 0.0) -> dict:
+               res: int = 320, level: float = 0.3, smooth: float = 0.0, blur: float = 1.2) -> dict:
     from PIL import Image
     from . import geometry, texture
     from .usd_export import write_usd
@@ -126,7 +126,7 @@ def run_direct(ply, out: Path, faces: int = 20000, tex_res: int = 2048, y_down: 
     xyz, scale, R, inv, alpha, rgb = load_gaussians(ply, y_down)
     occ, lo, step = opacity_field(xyz, scale, inv, alpha, res)
     t_field = time.time() - t0
-    raw = extract(occ, lo, step, level)
+    raw = extract(occ, lo, step, level, blur=blur)
     om = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(raw.vertices), o3d.utility.Vector3iVector(raw.faces))
     tm = geometry.clean(om)
     tm = geometry.smooth(tm, smooth)
@@ -143,7 +143,7 @@ def run_direct(ply, out: Path, faces: int = 20000, tex_res: int = 2048, y_down: 
     write_usd(out / "asset.usda", verts, uv_faces, uvs, normals, "./basecolor.png")
     trimesh.Trimesh(verts, uv_faces, process=False).export(out / "mesh.ply")
     rep = geometry.stats(trimesh.Trimesh(tm.vertices, tm.faces, process=False))
-    rep.update(mode="direct", grid=res, voxel=float(step), level=level, smooth=smooth, gaussians=int(len(xyz)),
+    rep.update(mode="direct", grid=res, blur=blur, folds=int((tm.face_adjacency_angles > np.radians(120)).sum()), voxel=float(step), level=level, smooth=smooth, gaussians=int(len(xyz)),
                uv_charts=int(charts), atlas_used=float(mask.mean()), texels_covered=1.0,
                t_field_s=round(t_field, 1), t_geometry_s=round(t_geo, 1), t_total_s=round(time.time() - t0, 1))
     (out / "report.json").write_text(json.dumps(rep, indent=2))
