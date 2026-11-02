@@ -2,7 +2,7 @@
 
 3D Gaussian Splatting → UV-textured USD mesh, automated end to end. Apache-2.0.
 
-**Tutorial: [docs/TUTORIAL.md](docs/TUTORIAL.md)** (text → Iris-3B → Idol → USD)
+**Tutorial: [docs/TUTORIAL.md](docs/TUTORIAL.md)** (image → Idol → splat → USD, with the UV map explained)
 
 ## Setup
 

@@ -1,6 +1,6 @@
 # Tutorial: from a text prompt to a UV-textured USD
 
-Result of this tutorial: `qa.psnr_mean` 28.9 dB, 20 036 faces, 0 open edges, about 13 min end to end.
+Result of this tutorial: a 20 030-face USD with UVs, 0 open edges, 0 non-manifold edges, in about 12 min.
 
 A fully open chain, every model and tool permissively licensed:
 
@@ -36,20 +36,31 @@ them. It takes about 40 s and should print something like:
 `chamfer_mean` is the shape error against the true geometry (here ≈ 0.25 % of the object size);
 `texture_psnr_db` is how well the colour comes out.
 
-## 3. Text → image (Iris-3B Turbo)
+## 3. Get an image
+
+Any picture of **one object, whole, centred, on a plain white or light-grey background** works. This
+tutorial uses a lucky-cat figurine made with an image generator:
+
+<img src="img/maneki_input.jpg" width="320">
+
+To make one from text with Iris-3B Turbo (speridlabs, Apache-2.0):
 
 ```sh
 .venv/bin/python scripts/text2image.py \
-  "A glossy white ceramic maneki-neko lucky cat figurine raising its left paw, red collar with a gold bell, \
-holding a gold koban coin, red cherry blossom painting, whole object centred, studio product photo, \
-plain black background" lucky_cat.png --seed 7
+  "A glossy white ceramic maneki-neko lucky cat figurine raising its paw, red collar with a gold bell, \
+holding a gold koban coin, cherry blossom painting, whole object centred, studio product photo, \
+plain white background" lucky_cat.png --seed 7
 ```
 
-<img src="img/cat_input.jpg" width="320">
+The script uses the public Iris-3B Turbo Space; set `HF_TOKEN` for more quota, or run Iris-3B locally
+(see [speridlabs/iris-3b](https://github.com/speridlabs/iris-3b)).
 
-Prompt tips for 3D: **one object, whole, centred, plain light-grey or white background**, studio light. Avoid cropped objects,
-scenes and strong reflections. The script uses the public Iris-3B Turbo Space; set `HF_TOKEN` for more
-quota, or run Iris-3B locally (see [speridlabs/iris-3b](https://github.com/speridlabs/iris-3b)).
+**Use a white background.** Idol invents the sides the picture never showed, and it borrows colour from
+the background. The same cat on a black background (left) and on a white one (right), seen from behind:
+
+<img src="img/maneki_back_black_vs_white.jpg" width="560">
+
+With the white background the back is cleaner and whiter, and the mesh came out with no defects at all.
 
 ## 4. Image → splat → USD, in one command
 
@@ -59,27 +70,37 @@ quota, or run Iris-3B locally (see [speridlabs/iris-3b](https://github.com/speri
 
 What happens:
 
-1. **Idol** turns the image into a 3D Gaussian splat on a CUDA machine (`SPLAT2MESH_IDOL_HOST`), inventing
-   the sides the picture never showed (~3 min on an 8 GB laptop GPU).
-2. The splat is rendered from **87 cameras** around it, with colour, mask and depth (~7 min).
+1. **Idol** turns the image into a 3D Gaussian splat on a CUDA machine (`SPLAT2MESH_IDOL_HOST`), ~3 min on
+   an 8 GB laptop GPU.
+2. The splat is rendered from **87 cameras** around it, with colour, mask and depth (~6 min).
 3. The depth maps are fused into a surface, cleaned, reduced to 20 000 faces and closed.
 4. **xatlas** unwraps the UVs; the colour of every view is baked into one texture.
 5. A **USD** is written with `UsdPreviewSurface`, and a QA pass compares the mesh with the splat.
 
-The splat from two views the input image never had: three-quarter (left) and back (right):
+The splat from two views the input image never had, three-quarter (left) and back (right):
 
-<img src="img/cat_splat.jpg" width="640">
-
-Idol invents the hidden side. Here the back came out dark and the tail black: the model took colour from
-the **black background**. Prompting for a light grey or white background usually gives a cleaner back.
+<img src="img/maneki_splat.jpg" width="640">
 
 Left, the splat; right, the textured mesh, from three of the cameras:
 
-<img src="img/cat_compare.jpg" width="480">
+<img src="img/maneki_compare.jpg" width="480">
 
-The UV atlas, with the chart outlines:
+### The UV map
 
-<img src="img/cat_uv.jpg" width="480">
+Left, the baked 2048² texture with the triangle outlines; right, the UV layout on its own:
+
+<img src="img/maneki_uv.jpg" width="100%">
+
+- **243 charts** fill **56 %** of the atlas; xatlas packs them without overlaps, with 4 texels of padding.
+- Each chart is a patch of surface that unfolds with little stretching; seams run between charts.
+- The large black chart is the **underside** of the cat: Idol generates the base in black and the bake
+  copies what the splat shows. The face, the 福 coin, the collar and the flowers are each in one or two
+  charts, so they keep their detail.
+- These UVs are made for baking, not for hand painting: for artist-clean UVs remesh to quads first.
+
+Result for this cat: **20 030 faces, 0 open edges, 0 non-manifold edges, PSNR 24.1 dB, 11.7 min** end to end
+(Idol 2.9 min, render 5.7 min, mesh + UV + bake + USD 3.1 min). The PSNR is lower than on matte objects
+because the porcelain highlights change with the view and a texture holds one fixed colour.
 
 Already have a splat? Start here instead:
 
@@ -145,4 +166,4 @@ more textured planes (see `splat2mesh/glass.py`). Check it with `tests/glass_sel
   reflections that change with the viewing angle.
 - **Many UV islands**: try `--smooth 1`; artist-clean UVs need quad remeshing.
 
-Images in this tutorial were generated with Iris-3B Turbo and Idol; no third-party assets.
+The input image of this tutorial was made with an image generator; every other image comes from Idol and splat2mesh.
