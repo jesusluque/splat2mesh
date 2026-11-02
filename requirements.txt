@@ -12,3 +12,4 @@ usd-core
 pillow
 plyfile
 OpenEXR
+gradio_client

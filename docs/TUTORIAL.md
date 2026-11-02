@@ -1,111 +1,148 @@
-# Tutorial: de una imagen o un splat a un USD con UV
+# Tutorial: from a text prompt to a UV-textured USD
 
-En 10 minutos: instalar, comprobar que funciona, convertir tu primer objeto y leer el resultado.
+Result of this tutorial: `qa.psnr_mean` 28.9 dB, 20 036 faces, 0 open edges, about 13 min end to end.
 
-## 1. Instalar
+A fully open chain, every model and tool permissively licensed:
+
+```
+text ──Iris-3B Turbo──▶ image ──Idol──▶ 3D Gaussian splat ──splat2mesh──▶ USD mesh + UV + texture
+     (speridlabs)               (speridlabs)                 (this repo)
+```
+
+You can also enter the chain with your own image or with an existing 3DGS `.ply`.
+
+## 1. Install
 
 ```sh
 git clone https://github.com/jesusluque/splat2mesh.git && cd splat2mesh
 uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -r requirements.txt
+uv pip install --python .venv/bin/python -r requirements.txt gradio_client
 ```
 
-## 2. Comprobar que funciona (sin GPU)
+## 2. Check it works (no GPU)
 
 ```sh
 .venv/bin/python tests/synthetic.py
 ```
 
-Genera un toro y una esfera con colores procedurales, los «fotografía» desde 80 cámaras y los convierte.
-Debe terminar en ~40 s con algo así:
+It builds a torus and a sphere with procedural colours, "photographs" them from 80 cameras and converts
+them. It takes about 40 s and should print something like:
 
 ```json
 "faces": 19998, "boundary_edges": 0, "non_manifold_edges": 0,
 "chamfer_mean": 0.0023, "texture_psnr_db": 27.4
 ```
 
-`chamfer_mean` es el error de forma frente a la geometría real (aquí ≈ 0,25 % del tamaño) y
-`texture_psnr_db` lo bien que sale el color. La malla y la textura quedan en `out/synthetic/`.
+`chamfer_mean` is the shape error against the true geometry (here ≈ 0.25 % of the object size);
+`texture_psnr_db` is how well the colour comes out.
 
-## 3. Convertir un objeto
-
-### Desde un splat (`.ply` 3DGS)
+## 3. Text → image (Iris-3B Turbo)
 
 ```sh
-.venv/bin/python scripts/splat2usd.py mi_objeto.ply --out out/mio
+.venv/bin/python scripts/text2image.py \
+  "A glossy white ceramic maneki-neko lucky cat figurine raising its left paw, red collar with a gold bell, \
+holding a gold koban coin, red cherry blossom painting, whole object centred, studio product photo, \
+plain black background" lucky_cat.png --seed 7
 ```
 
-- Si el `.ply` sale boca abajo (convención COLMAP, Y hacia abajo), añade `--y-down`.
-- Si es un 3DGS estándar (no Mip-Splatting), añade `--no-antialias`.
+<img src="img/cat_input.jpg" width="320">
 
-### Desde una imagen
+Prompt tips for 3D: **one object, whole, centred, plain light-grey or white background**, studio light. Avoid cropped objects,
+scenes and strong reflections. The script uses the public Iris-3B Turbo Space; set `HF_TOKEN` for more
+quota, or run Iris-3B locally (see [speridlabs/iris-3b](https://github.com/speridlabs/iris-3b)).
+
+## 4. Image → splat → USD, in one command
 
 ```sh
-.venv/bin/python scripts/splat2usd.py gato.png --gaussians 524288 --out out/mio
+.venv/bin/python scripts/splat2usd.py lucky_cat.png --gaussians 524288 --out out/tutorial
 ```
 
-La imagen pasa primero por **Idol** (imagen → splat) en una máquina con CUDA
-(`SPLAT2MESH_IDOL_HOST`, ver README). Idol inventa los lados que la foto no ve.
+What happens:
 
-### Una carpeta entera
+1. **Idol** turns the image into a 3D Gaussian splat on a CUDA machine (`SPLAT2MESH_IDOL_HOST`), inventing
+   the sides the picture never showed (~3 min on an 8 GB laptop GPU).
+2. The splat is rendered from **87 cameras** around it, with colour, mask and depth (~7 min).
+3. The depth maps are fused into a surface, cleaned, reduced to 20 000 faces and closed.
+4. **xatlas** unwraps the UVs; the colour of every view is baked into one texture.
+5. A **USD** is written with `UsdPreviewSurface`, and a QA pass compares the mesh with the splat.
+
+The splat from two views the input image never had: three-quarter (left) and back (right):
+
+<img src="img/cat_splat.jpg" width="640">
+
+Idol invents the hidden side. Here the back came out dark and the tail black: the model took colour from
+the **black background**. Prompting for a light grey or white background usually gives a cleaner back.
+
+Left, the splat; right, the textured mesh, from three of the cameras:
+
+<img src="img/cat_compare.jpg" width="480">
+
+The UV atlas, with the chart outlines:
+
+<img src="img/cat_uv.jpg" width="480">
+
+Already have a splat? Start here instead:
 
 ```sh
-.venv/bin/python scripts/splat2usd.py carpeta_con_imagenes_y_plys/ --out out/lote --notify
+.venv/bin/python scripts/splat2usd.py my_object.ply --out out/tutorial    # add --y-down for COLMAP-style .ply
 ```
 
-Cada objeto se procesa por separado; si uno falla, el lote sigue. `--notify` manda el resumen al terminar.
+A whole folder of images and `.ply` files is a batch: `splat2usd.py my_folder/ --out out/batch`.
 
-## 4. Qué obtienes
+## 5. What you get
 
 ```
-out/mio/gato/
-├── report.json          ← medidas y tiempos; "ok": true/false
-├── render/              ← las 87 vistas del splat (color, máscara, profundidad, cámaras)
+out/tutorial/lucky_cat/
+├── report.json          ← measurements and timings; "ok": true/false
+├── render/              ← the 87 views of the splat (colour, mask, depth, cameras)
 └── usd/
-    ├── asset.usda       ← la malla con UV y material (ábrelo en usdview, Blender, Omniverse…)
-    ├── basecolor.png    ← la textura
+    ├── asset.usda       ← the mesh with UVs and material (usdview, Blender, Omniverse…)
+    ├── basecolor.png    ← the texture
     ├── mesh.ply
-    └── compare.png      ← izquierda: el splat; derecha: tu malla texturizada
+    └── compare.png      ← splat vs textured mesh
 ```
 
-Cómo leer `report.json`:
+Reading `report.json`:
 
-| Campo | Qué significa | Bueno |
+| Field | Meaning | Good |
 |---|---|---|
-| `mesh.boundary_edges` | bordes abiertos (agujeros) | 0 |
-| `mesh.non_manifold_edges` | aristas compartidas por más de 2 caras | ≤ 20 |
-| `mesh.uv_charts` | islas del mapa UV | cuantas menos, mejor |
-| `qa.psnr_mean` | parecido de la malla texturizada al splat, en dB | ≥ 22 (26–30 es muy bueno) |
-| `t_total_s` | tiempo total | |
+| `mesh.boundary_edges` | open edges (holes) | 0 |
+| `mesh.non_manifold_edges` | edges shared by more than 2 faces | ≤ 20 |
+| `mesh.uv_charts` | UV islands | fewer is better |
+| `qa.psnr_mean` | how close the textured mesh looks to the splat, dB | ≥ 22 (26–30 is very good) |
+| `t_total_s` | total time | |
 
-Mira siempre `compare.png`: es la forma más rápida de ver si algo ha ido mal.
+Always look at `compare.png`: it is the quickest way to spot a problem.
 
-## 5. Ajustes útiles
+## 6. Useful options
 
-| Opción | Para qué |
+| Option | What for |
 |---|---|
-| `--faces 50000` | más detalle geométrico (por defecto 20 000) |
-| `--tex 4096` | textura más grande (por defecto 2048) |
-| `--smooth 3` | suaviza la superficie; recomendado para cristal, empeora un poco la precisión en opacos |
-| `--min-psnr 25` | umbral más estricto para marcar un objeto como OK |
+| `--faces 50000` | more geometric detail (default 20 000) |
+| `--tex 4096` | bigger texture (default 2048) |
+| `--smooth 3` | smoother surface; recommended for glass, slightly less accurate on opaque objects |
+| `--min-psnr 25` | stricter threshold for "ok" |
+| `--notify` | send the summary and images when a batch ends |
 
-## 6. Objetos de cristal
+## 7. Glass
 
-Un splat no sabe que algo es transparente: pinta lo que se ve a través como si fuera color. Si tienes
-imágenes del objeto delante de un fondo conocido (p. ej. un damero), la herramienta estima el material:
+A splat does not know an object is transparent: it paints what shows through as colour. Given views of
+the object in front of a known background (a checker, for instance), the tool estimates the material:
 
 ```sh
-.venv/bin/python scripts/glass_estimate.py out/mio/vaso/usd vistas_con_fondo/ fondo.json --apply
+.venv/bin/python scripts/glass_estimate.py out/tutorial/vase/usd views_with_background/ background.json --apply
 ```
 
-Calcula el índice de refracción y el tinte trazando rayos a través de la malla hasta el fondo, y cambia
-el material del USD a cristal. `fondo.json` describe el fondo como uno o varios planos con textura
-(ver `splat2mesh/glass.py`). Compruébalo con `tests/glass_selftest.py`.
+It finds the index of refraction and the tint by tracing refracted rays through the mesh to the
+background, and turns the USD material into glass. `background.json` describes the background as one or
+more textured planes (see `splat2mesh/glass.py`). Check it with `tests/glass_selftest.py`.
 
-## 7. Si algo falla
+## 8. When something goes wrong
 
-- **`"ok": false` con `error`**: el mensaje dice en qué paso (Idol, render, malla).
-- **Objeto boca abajo en `compare.png`**: repite con `--y-down` (o `--y-up` si venía de Idol ya derecho).
-- **PSNR bajo con brillos o reflejos**: normal en materiales muy brillantes; la textura es un color
-  fijo y no reproduce reflejos que cambian con el ángulo.
-- **Muchas islas UV**: prueba `--smooth 1`; para UV limpias de artista hará falta remallar en quads.
+- **`"ok": false` with an `error`**: the message names the step (Idol, render, mesh).
+- **Object upside down in `compare.png`**: rerun with `--y-down` (or `--y-up` for an Idol splat that is already upright).
+- **Low PSNR on shiny objects**: expected; the texture is one fixed colour and cannot reproduce
+  reflections that change with the viewing angle.
+- **Many UV islands**: try `--smooth 1`; artist-clean UVs need quad remeshing.
+
+Images in this tutorial were generated with Iris-3B Turbo and Idol; no third-party assets.
