@@ -33,3 +33,12 @@ Test set: porcelain, metal, wood, lacquer, mixes. GPU on the Mac only through sh
   solid before marching cubes removes folds: cat blur 0.8→1.2: folds 34→6, charts 108→65, PSNR 27.05→26.86.
   New default blur 1.2. Owl at 1.2: 990 charts (real carved detail). xatlas max_cost 4 was worse inside the pipeline
   (308 vs 108 charts on the cat; the uv_sweep ran on a seam-split mesh) → back to xatlas defaults.
+- 20:10 Materials v1. Colour clusters (Lab k-means, ΔE merge) of the baked texture → overlay/crop per cluster →
+  Qwen3-VL-4B (Iris's text encoder, local, MPS). Multiple-choice/free-text prompts collapsed to "porcelain" for all
+  regions (prompt bias). Yes/no probing per material on the zoomed crop works: gold 0.98, red lacquer/glaze 0.998,
+  white ceramic 0.85. apply(): soft per-texel assignment → roughness/metallic maps, highlight removal on glossy
+  dielectrics, USD wired (roughness/metallic UsdUVTexture). athenea path-traced matte vs PBR: gold coin/bell metallic.
+  athenea rt fails (ShaderFailure, internal compiler error) on our plain UsdPreviewSurface with constant float
+  roughness/metallic; textured inputs work → reported.
+- ENEAS (speridlabs segmentation): HF Space needs PRO; Windows native blocked by App Control (spaCy DLL); installing
+  in ixwin WSL Ubuntu-24.04 (uv sync).
