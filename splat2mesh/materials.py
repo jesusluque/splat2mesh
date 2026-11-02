@@ -222,15 +222,21 @@ def from_masks(spec_json, masks: dict, min_overlap: float = 0.15) -> dict:
     obj = ndi.binary_fill_holes(img.max(-1) > 0.03)
     C = np.array([r["lab"] for r in spec["regions"]])
     lab_px = ((_srgb_to_lab(img)[..., None, :] - C[None, None]) ** 2).sum(-1).argmin(-1)
+    # overlapping masks: the most specific (smallest) wins each pixel ("the body" must not swallow "the coin")
+    label = np.full(obj.shape, -1)
+    names = list(masks)
+    for i in sorted(range(len(names)), key=lambda i: -masks[names[i]].sum()):
+        label[masks[names[i]]] = i
     for j, r in enumerate(spec["regions"]):
         px = obj & (lab_px == j)
         n = px.sum()
         if n == 0:
             continue
-        cover = {cls: float((m & px).sum() / n) for cls, m in masks.items()}
+        cover = {cls: float(((label == i) & px).sum() / n) for i, cls in enumerate(names)}
         best = max(cover, key=cover.get) if cover else None
         r["mask_cover"] = {k: round(v, 3) for k, v in cover.items()}
         if best and cover[best] >= min_overlap:
-            r.update(material=best, metallic=PRESET[best][0], roughness=PRESET[best][1], source="mask")
+            cls = best.split("|")[0]                     # keys may be "class|phrase"
+            r.update(material=cls, metallic=PRESET[cls][0], roughness=PRESET[cls][1], source="mask", mask=best)
     p.write_text(json.dumps(spec, indent=1))
     return {"regions": [(r["material"], r.get("source", "vlm"), r["share"]) for r in spec["regions"]]}

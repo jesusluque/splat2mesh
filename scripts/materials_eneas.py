@@ -35,7 +35,7 @@ for cls, ph in items:
     f = mdir / (ph.replace(" ", "_") + ".png")
     if f.exists():
         m = np.asarray(Image.open(f).convert("L").resize((W, H))) > 127
-        masks[cls] = masks.get(cls, np.zeros((H, W), bool)) | m
+        masks[f"{cls}|{ph}"] = m
 print("masks:", {k: round(float(v.mean()), 4) for k, v in masks.items()})
 print(from_masks(spec, masks))
 print(apply(spec))

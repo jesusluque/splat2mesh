@@ -42,3 +42,10 @@ Test set: porcelain, metal, wood, lacquer, mixes. GPU on the Mac only through sh
   roughness/metallic; textured inputs work → reported.
 - ENEAS (speridlabs segmentation): HF Space needs PRO; Windows native blocked by App Control (spaCy DLL); installing
   in ixwin WSL Ubuntu-24.04 (uv sync).
+- 21:00 Web is USD-only (three.js USDZLoader; ASCII usdz, bare texture names, single matrix xformOp). Verified in Node.
+- 21:10 User: owl and lamp broken on the web. Cause: low-opacity gaussians on Idol's back/side fall under the solid
+  threshold (0.3) → craters. Level 0.15: owl clean (folds 228→9, charts 990→91), lamp base fixed (shade flap remains,
+  from the splat). Cat at 0.15: PSNR 26.86→26.96, charts 65→148. New default level 0.15. Rebuilding test set (v3).
+- ENEAS in ixwin WSL works: first call 28 min (download 9 GB), then ~13 s per phrase. One instance per phrase
+  ("bell and coin" → bell only). Overlapping masks: smallest wins. scripts/materials_eneas.py = semi-automatic
+  materials from a short description "material: part, part; …".
