@@ -1,0 +1,14 @@
+numpy
+scipy
+trimesh
+networkx
+rtree
+open3d>=0.18
+xatlas
+fast-simplification
+manifold3d
+scikit-image
+usd-core
+pillow
+plyfile
+OpenEXR
