@@ -1,4 +1,4 @@
-# Tutorial: from a text prompt to a UV-textured USD
+# Tutorial: from an image (or a text prompt) to a UV-textured USD
 
 Result of this tutorial: a 20 030-face USD with UVs, 0 open edges, 0 non-manifold edges, in about 12 min.
 
