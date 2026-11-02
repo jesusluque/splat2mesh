@@ -350,3 +350,93 @@ def apply_texel_classes(spec_json, out_dir=None) -> dict:
     orm = np.stack([np.ones_like(R), R, M], -1)
     Image.fromarray((orm[::-1].clip(0, 1) * 255).astype(np.uint8)).save(out_dir / "orm.png")
     return res
+
+
+def export_parts(asset_dir, out_name: str = "asset_parts.usda", group: str = "part") -> dict:
+    """Split the textured mesh into one Mesh prim per part (ENEAS phrase, else material class of the face's colour
+    region), each with its own material — /Asset/Parts/<part>, /Asset/Materials/M_<part> — so Cryptomatte
+    (CryptoObject from the prim path, e.g. athenea) yields one matte per part. Textures are shared."""
+    import re
+    from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
+    from .rerender import load_usd_textured
+    asset = Path(asset_dir)
+    spec = json.loads((asset / "mat" / "regions.json").read_text())
+    V, F, st, _ = load_usd_textured(str(asset / "asset.usda"))
+    src = Usd.Stage.Open(str(asset / "asset.usda"))
+    N = np.asarray(UsdGeom.Mesh(src.GetPrimAtPath("/Asset/Geom")).GetNormalsAttr().Get(), np.float32)
+    tex, mask = _texture_and_mask(asset)
+    R = tex.shape[0]
+    cen = st[F].mean(1)
+    px = np.clip((cen * R).astype(int), 0, R - 1)
+    tc_path = asset / "mat" / "texel_class.npy"
+    if tc_path.exists() and spec.get("texel_classes"):
+        names = spec["texel_classes"]
+        lab = np.load(tc_path)[px[:, 1], px[:, 0]]
+        part_names = [n.split("|", 1)[1] if "|" in n else n for n in names]
+        part_cls = [n.split("|", 1)[0] for n in names]
+    else:
+        C = np.array([r["lab"] for r in spec["regions"]])
+        lab = ((_srgb_to_lab(tex[px[:, 1], px[:, 0]])[:, None] - C[None]) ** 2).sum(-1).argmin(-1)
+        part_cls = [r.get("material", "glazed ceramic") for r in spec["regions"]]
+        part_names = part_cls
+    lab = np.where(lab < 0, int(np.bincount(lab[lab >= 0]).argmax()) if (lab >= 0).any() else 0, lab)
+    if group == "material":          # one prim (and one material) per material class: Cryptomatte per material
+        classes = sorted(set(part_cls))
+        lab = np.array([classes.index(part_cls[i]) for i in lab])
+        part_names, part_cls = classes, classes
+    # files referenced by the single-material version
+    files = {}
+    for prim in src.Traverse():
+        if prim.GetTypeName() == "Shader":
+            f = UsdShade.Shader(prim).GetInput("file")
+            if f and f.Get():
+                files[prim.GetName()] = f.Get().path
+    st_out = Usd.Stage.CreateNew(str(asset / out_name))
+    UsdGeom.SetStageUpAxis(st_out, UsdGeom.Tokens.y); UsdGeom.SetStageMetersPerUnit(st_out, 1.0)
+    root = UsdGeom.Xform.Define(st_out, "/Asset"); st_out.SetDefaultPrim(root.GetPrim())
+    slug = lambda s: re.sub(r"[^A-Za-z0-9_]", "_", re.sub(r"^the\s+", "", s.strip().lower())).strip("_")[:48] or "part"
+    used, parts = set(), {}
+    for i in np.unique(lab):
+        name = slug(part_names[i]); k = name; n = 2
+        while k in used:
+            k = f"{name}_{n}"; n += 1
+        used.add(k)
+        fi = np.nonzero(lab == i)[0]
+        vid, inv = np.unique(F[fi].ravel(), return_inverse=True)
+        mesh = UsdGeom.Mesh.Define(st_out, f"/Asset/{'Parts' if group == 'part' else 'MaterialGroups'}/{k}")
+        mesh.CreatePointsAttr(Vt.Vec3fArray.FromNumpy(V[vid].astype(np.float32)))
+        mesh.CreateFaceVertexCountsAttr(Vt.IntArray.FromNumpy(np.full(len(fi), 3, np.int32)))
+        mesh.CreateFaceVertexIndicesAttr(Vt.IntArray.FromNumpy(inv.astype(np.int32)))
+        mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+        mesh.CreateNormalsAttr(Vt.Vec3fArray.FromNumpy(N[vid])); mesh.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
+        lo, hi = V[vid].min(0), V[vid].max(0)
+        mesh.CreateExtentAttr([Gf.Vec3f(*map(float, lo)), Gf.Vec3f(*map(float, hi))])
+        UsdGeom.PrimvarsAPI(mesh).CreatePrimvar("st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex).Set(
+            Vt.Vec2fArray.FromNumpy(st[vid].astype(np.float32)))
+        cls = part_cls[i]
+        mpath = f"/Asset/Materials/M_{k}"
+        mat = UsdShade.Material.Define(st_out, mpath)
+        pbr = UsdShade.Shader.Define(st_out, mpath + "/PreviewSurface"); pbr.CreateIdAttr("UsdPreviewSurface")
+        rd = UsdShade.Shader.Define(st_out, mpath + "/stReader"); rd.CreateIdAttr("UsdPrimvarReader_float2")
+        rd.CreateInput("varname", Sdf.ValueTypeNames.String).Set("st")
+        for shname, inp, typ, out in (("BaseColor", "diffuseColor", Sdf.ValueTypeNames.Color3f, "rgb"),
+                                      ("Roughness", "roughness", Sdf.ValueTypeNames.Float, "r"),
+                                      ("Metallic", "metallic", Sdf.ValueTypeNames.Float, "r")):
+            if shname not in files:
+                continue
+            t = UsdShade.Shader.Define(st_out, f"{mpath}/{shname}"); t.CreateIdAttr("UsdUVTexture")
+            t.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(files[shname])
+            t.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set("sRGB" if shname == "BaseColor" else "raw")
+            t.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(rd.ConnectableAPI(), "result")
+            t.CreateOutput(out, Sdf.ValueTypeNames.Float3 if out == "rgb" else Sdf.ValueTypeNames.Float)
+            pbr.CreateInput(inp, typ).ConnectToSource(t.ConnectableAPI(), out)
+        ior = (LIB.get(cls) or LIB.get(VLM_TO_LIB.get(cls, ""), {})).get("ior")
+        if ior:
+            pbr.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(float(ior))
+        mat.CreateSurfaceOutput().ConnectToSource(pbr.ConnectableAPI(), "surface")
+        UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(mat)
+        mesh.GetPrim().SetCustomDataByKey("splat2mesh:material", cls)
+        parts[k] = {"material": cls, "faces": int(len(fi))}
+    st_out.GetRootLayer().Save()
+    (asset / ("parts.json" if group == "part" else "material_groups.json")).write_text(json.dumps(parts, indent=1))
+    return parts
