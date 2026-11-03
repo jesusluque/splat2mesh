@@ -73,7 +73,8 @@ def opacity_field(xyz, scale, inv, alpha, res: int = 320, pad: float = 0.05, max
     return occ, lo, step
 
 
-def extract(occ, lo, step, level: float = 0.5, close_iters: int = 3, blur: float = 0.8) -> trimesh.Trimesh:
+def extract(occ, lo, step, level: float = 0.5, close_iters: int = 3, blur: float = 0.8,
+            fill: bool = True) -> trimesh.Trimesh:
     """Solid = (occ > level), closed (bridges gaps between flat gaussians), interior cavities filled,
     only the largest connected solid kept; the surface is taken on a lightly blurred solid so it stays
     smooth, then marching cubes. Result: one closed shell."""
@@ -83,7 +84,8 @@ def extract(occ, lo, step, level: float = 0.5, close_iters: int = 3, blur: float
     if close_iters:
         solid = ndi.binary_closing(np.pad(solid, close_iters), iterations=close_iters)[
             close_iters:-close_iters, close_iters:-close_iters, close_iters:-close_iters]
-    solid = ndi.binary_fill_holes(solid)
+    if fill:
+        solid = ndi.binary_fill_holes(solid)
     lab, n = ndi.label(solid)
     if n > 1:
         sizes = ndi.sum(solid, lab, range(1, n + 1))

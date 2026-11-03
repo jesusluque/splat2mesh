@@ -74,6 +74,11 @@ for d in items:
     t = time.time()
     p = subprocess.run([sys.executable, str(ROOT / "scripts/materials_eneas3d.py"), str(out / d.name / "usd"),
                         str(d / "idol_input.png"), desc], capture_output=True, text=True)
+    from splat2mesh.interior import extract_interior          # filaments, wicks… inside glass parts
+    try:
+        print(d.name, "interior", extract_interior(out / d.name / "usd", d / f"{d.name}.ply", y_down=True), flush=True)
+    except Exception as e:
+        print(d.name, "interior skipped:", e, flush=True)
     tail = [l for l in p.stdout.splitlines() if l.startswith("{'seen_texels'")]
     summary[d.name] = {"prompt": prompts[int(d.name)], "description": desc, "result": tail[-1] if tail else p.stderr[-500:],
                        "seconds": round(time.time() - t)}

@@ -501,6 +501,7 @@ def export_parts(asset_dir, out_name: str = "asset_parts.usda", group: str = "pa
     src = Usd.Stage.Open(str(asset / "asset.usda"))
     N = np.asarray(UsdGeom.Mesh(src.GetPrimAtPath("/Asset/Geom")).GetNormalsAttr().Get(), np.float32)
     tex, mask = _texture_and_mask(asset)
+    fin = json.loads((asset / "mat" / "finish.json").read_text()) if (asset / "mat" / "finish.json").exists() else {}
     R = tex.shape[0]
     cen = st[F].mean(1)
     px = np.clip((cen * R).astype(int), 0, R - 1)
@@ -523,7 +524,7 @@ def export_parts(asset_dir, out_name: str = "asset_parts.usda", group: str = "pa
     # files referenced by the single-material version
     files = {}
     for prim in src.Traverse():
-        if prim.GetTypeName() == "Shader":
+        if prim.GetTypeName() == "Shader" and "M_interior" not in str(prim.GetPath()):
             f = UsdShade.Shader(prim).GetInput("file")
             if f and f.Get():
                 files[prim.GetName()] = f.Get().path
@@ -575,10 +576,19 @@ def export_parts(asset_dir, out_name: str = "asset_parts.usda", group: str = "pa
         mat.CreateSurfaceOutput().ConnectToSource(pbr.ConnectableAPI(), "surface")
         UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(mat)
         mesh.GetPrim().SetCustomDataByKey("splat2mesh:material", cls)
-        L = _lib(cls)
+        L = {**_lib(cls), **fin.get(cls, {})}
         parts[k] = {"material": cls, "faces": int(len(fi)), "transmission": L.get("transmission", 0.0),
+                    "patterned": bool(L.get("patterned", False)), "tint": L.get("tint"),
                     "subsurface": L.get("subsurface", 0.0), "ior": L.get("ior"), "roughness": L.get("roughness"),
                     "metallic": L.get("metallic", 0)}
+    if (asset / "interior.npz").exists():      # inner structure of transparent parts (see interior.py)
+        from .interior import define_interior
+        grp = f"/Asset/{'Parts' if group == 'part' else 'MaterialGroups'}"
+        UsdGeom.Xform.Define(st_out, f"{grp}/interior")
+        im = define_interior(st_out, f"{grp}/interior/Geom", asset, "/Asset/Materials/M_interior")
+        parts["interior"] = {"material": "interior", "faces": len(im.GetFaceVertexCountsAttr().Get()), "transmission": 0.0,
+                             "patterned": False, "tint": None, "subsurface": 0.0, "ior": None, "roughness": 0.45,
+                             "metallic": 0}
     st_out.GetRootLayer().Save()
     (asset / ("parts.json" if group == "part" else "material_groups.json")).write_text(json.dumps(parts, indent=1))
     return parts
@@ -697,6 +707,9 @@ def smooth_shading_normals(asset_dir, cls_tex, names) -> int:
     return it
 
 
+GLASS_PATTERN_SPREAD = 12.0   # Lab a*b* median distance; above it the glass is multi-coloured (stained glass)
+
+
 def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
     """Second pass over the per-texel classes: physical base colour for metals (library F0 × the texture's own
     luminance detail, so engraving/hammering stays), transmission & subsurface maps, opacity for the preview
@@ -732,12 +745,21 @@ def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
             detail = np.exp(0.9 * hp_cache["hp"][sel])
             detail = np.clip(detail, 0.55, 1.0 / f0.max())
             base[sel] = srgb(f0[None] * detail[:, None])
-        if L.get("transmission", 0) > 0:      # glass: what the splat shows is the background seen through it
-            tint = np.median(lin(base[sel]), 0)
-            tint = tint / max(tint.max(), 1e-4) * 0.95            # keep the hue, drop the frozen brightness
-            base[sel] = srgb(tint)[None]
-        T[sel] = L.get("transmission", 0.0); S[sel] = L.get("subsurface", 0.0)
-        info[cls] = {"transmission": L.get("transmission", 0.0), "subsurface": L.get("subsurface", 0.0),
+        trans = L.get("transmission", 0.0); patterned = False; tint = None
+        if trans > 0:      # glass: what the splat shows is mostly the background seen through it
+            ab = _srgb_to_lab(base[sel])[:, 1:]
+            spread = float(np.median(np.hypot(*(ab - np.median(ab, 0)).T)))   # hue diversity of the glass texels
+            patterned = spread > GLASS_PATTERN_SPREAD     # stained / multi-coloured glass: the colours are the object
+            print(f"glass {cls}: colour spread {spread:.1f} → {'patterned (colour kept)' if patterned else 'uniform tint'}")
+            if patterned:
+                trans = trans * 0.5                       # coloured glass lets less light through, shows its colours
+            else:
+                tint = np.median(lin(base[sel]), 0)
+                tint = tint / max(tint.max(), 1e-4) * 0.95        # keep the hue, drop the frozen brightness
+                base[sel] = srgb(tint)[None]
+        T[sel] = trans; S[sel] = L.get("subsurface", 0.0)
+        info[cls] = {"transmission": trans, "subsurface": L.get("subsurface", 0.0), "patterned": patterned,
+                     "tint": None if tint is None else [round(float(x), 4) for x in tint],   # linear RGB
                      "thin_walled": L.get("thin_walled", False), "ior": L.get("ior")}
     from .texture import inpaint
     for name, img in (("transmission", T), ("subsurface", S)):
@@ -751,6 +773,7 @@ def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
     iors = [v["ior"] for v in info.values() if v["ior"]]
     _usd_add_mtlx(asset / "asset.usda", has_t, has_s, ior=float(np.median(iors)) if iors else 1.5,
                   thin=any(v["thin_walled"] and v["transmission"] > 0 for v in info.values()))
+    (asset / "mat" / "finish.json").write_text(json.dumps(info, indent=1, default=float))
     return {"transmissive": has_t, "subsurface": has_s, "classes": info}
 
 

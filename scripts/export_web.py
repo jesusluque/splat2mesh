@@ -27,7 +27,7 @@ def make_usdz(src: Path, dst: Path, usd_name: str = "asset.usda") -> dict:
                 srcfile = (src / p).resolve()
                 name = srcfile.name
                 im = Image.open(srcfile)
-                if name.startswith("basecolor"):           # colour: PNG (three's USDZLoader reads PNG only), ≤ 3072²
+                if name.startswith(("basecolor", "interior")):           # colour: PNG (three's USDZLoader reads PNG only), ≤ 3072²
                     if not (tmp / name).exists():
                         w = min(im.width, 3072)
                         im.convert("RGB").resize((w, w), Image.LANCZOS).save(tmp / name, optimize=True)
@@ -204,14 +204,18 @@ function view(el) {{
       const p = parts[o.name] || (o.parent && parts[o.parent.name]);
       if (!p) return;
       const m = o.material;
-      if (p.transmission > 0) {{          // glass / crystal: physical transmission (USDZLoader has no opacity)
+      if (p.transmission > 0 && p.patterned) {{   // stained / multi-coloured glass: its colours are the texture
+        o.material = new THREE.MeshPhysicalMaterial({{ map: m.map, metalness: 0, roughness: Math.min(p.roughness ?? 0.05, 0.1),
+          transmission: p.transmission, ior: p.ior || 1.5, thickness: 0.02, side: THREE.DoubleSide, envMapIntensity: 1.0 }});
+      }} else if (p.transmission > 0) {{          // glass / crystal: physical transmission (USDZLoader has no opacity)
         // tint from the part's texture (median colour), thin-ish glass, absorption tint over a short distance
         let tint = new THREE.Color(0xffffff);
-        if (m.map && m.map.image) {{ try {{ const c = document.createElement("canvas"); c.width = c.height = 16;
+        if (p.tint) tint = new THREE.Color().setRGB(p.tint[0], p.tint[1], p.tint[2], THREE.LinearSRGBColorSpace);
+        else if (m.map && m.map.image) {{ try {{ const c = document.createElement("canvas"); c.width = c.height = 16;
           const x = c.getContext("2d"); x.drawImage(m.map.image, 0, 0, 16, 16); const d = x.getImageData(0, 0, 16, 16).data;
           let r = 0, g2 = 0, b = 0; for (let i = 0; i < d.length; i += 4) {{ r += d[i]; g2 += d[i + 1]; b += d[i + 2]; }}
           const n = d.length / 4, mx = Math.max(r, g2, b) / n || 1; tint = new THREE.Color(r / n / mx, g2 / n / mx, b / n / mx); }} catch (e) {{}} }}
-        o.material = new THREE.MeshPhysicalMaterial({{ color: 0xffffff, metalness: 0, roughness: Math.min(p.roughness ?? 0.03, 0.08),
+        o.material = new THREE.MeshPhysicalMaterial({{ color: tint.clone().lerp(new THREE.Color(1, 1, 1), 0.35), metalness: 0, roughness: Math.min(p.roughness ?? 0.03, 0.08),
           transmission: 1, ior: p.ior || 1.5, thickness: 0.04, attenuationColor: tint, attenuationDistance: 0.25,
           side: THREE.DoubleSide, specularIntensity: 1, envMapIntensity: 1.2 }});
       }} else if (p.subsurface > 0) {{    // jade, wax, marble: a soft sheen of transmission as a cheap subsurface look

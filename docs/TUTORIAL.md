@@ -85,7 +85,16 @@ For every object:
      log-luminance): hammering and engraving stay, frozen reflections go;
    - *the side Idol invented* (whatever the input picture did not show) is lifted to the brightness of the same
      material on the seen side when it came out much darker (dark backs, black bases);
-   - *glass, crystal, jade and wax* objects get their vertex positions smoothed as well.
+   - *glass, crystal, jade and wax* objects get their vertex positions smoothed as well;
+   - *glass colour*: a glass whose texels share one hue (clear, blue, green bottle) gets one uniform tint, stored in
+     the part list so viewers can use it as absorption; a glass whose texels vary strongly in hue (Lab a\*b\* spread
+     above 12: Tiffany shades, stained glass) keeps its baked colours with half transmission. Measured on the test
+     set: single-colour glass 0.5–5.7, stained glass 15–20.
+
+9. **What is inside the glass** (`splat2mesh/interior.py`): direct mode makes one solid, so a filament, a wick or a
+   dip tube would vanish inside it. The splat still has them — opaque gaussians well inside the shell (more than 8 %
+   of the object size) under a transmissive surface. They are meshed on their own, unwrapped, baked and added as
+   `/Asset/Interior` (and as an `interior` part). Objects without glass, or with nothing inside it, are untouched.
 
 What lands in the USD:
 
@@ -122,7 +131,8 @@ Next to `asset.usda` the flow writes:
 ## 6. What still goes wrong
 
 - Idol paints what it cannot see: dark undersides, refraction baked as colour on glass.
-- Direct mode fills solids: a light bulb is solid glass, a vase has no inside.
+- Direct mode fills solids: a vase has no inside, a bottle no liquid surface. What sits inside glass is recovered
+  (filaments, wicks), but as Idol made it: flat ribbons rather than wires.
 - Parts below a few pixels (filaments, eyelids, corks) are often missed; colour priors only cover metals and rubber.
 - A part the segmenter misses and that is not a metal or rubber (a rosewood stand under jade) takes the main material.
 - Dark glass the segmenter misses (car windows) is taken by the near-black rubber prior.
