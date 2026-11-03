@@ -1,10 +1,10 @@
 {
- "about": "PBR presets for splat2mesh. metallic/roughness for UsdPreviewSurface (metallic-roughness workflow); ior for dielectrics; f0 = linear reflectance at normal incidence used as base colour for metals (values from widely used physically-based reference charts, e.g. Lagarde's and Hoffman's). roughness is a typical value for the finish named; 'range' gives the plausible span. These are catalogue values, not measurements. transmission/subsurface/thin_walled feed a MaterialX standard_surface (translucent and glass parts); UsdPreviewSurface gets opacity\u22481-0.9\u00b7transmission.",
+ "about": "PBR presets for splat2mesh. metallic/roughness for UsdPreviewSurface (metallic-roughness workflow); ior for dielectrics; f0 = linear reflectance at normal incidence used as base colour for metals (values from widely used physically-based reference charts, e.g. Lagarde's and Hoffman's). roughness is a typical value for the finish named; 'range' gives the plausible span. These are catalogue values, not measurements. transmission/subsurface/thin_walled feed a MaterialX standard_surface (translucent and glass parts); UsdPreviewSurface gets opacity\u22481-0.9\u00b7transmission. Roughness values were raised (2026-11-03) from showroom-polished to used-object values after the web looked too glossy.",
  "materials": {
   "gold": {
    "class": "metal",
    "metallic": 1,
-   "roughness": 0.2,
+   "roughness": 0.32,
    "range": [
     0.05,
     0.45
@@ -31,7 +31,7 @@
   "brass": {
    "class": "metal",
    "metallic": 1,
-   "roughness": 0.25,
+   "roughness": 0.38,
    "range": [
     0.1,
     0.5
@@ -52,7 +52,7 @@
   "bronze": {
    "class": "metal",
    "metallic": 1,
-   "roughness": 0.35,
+   "roughness": 0.45,
    "range": [
     0.2,
     0.6
@@ -73,7 +73,7 @@
   "copper": {
    "class": "metal",
    "metallic": 1,
-   "roughness": 0.25,
+   "roughness": 0.38,
    "range": [
     0.1,
     0.5
@@ -94,7 +94,7 @@
   "silver": {
    "class": "metal",
    "metallic": 1,
-   "roughness": 0.15,
+   "roughness": 0.28,
    "range": [
     0.05,
     0.4
@@ -116,7 +116,7 @@
   "polished steel": {
    "class": "metal",
    "metallic": 1,
-   "roughness": 0.15,
+   "roughness": 0.3,
    "range": [
     0.05,
     0.3
@@ -139,7 +139,7 @@
   "brushed steel": {
    "class": "metal",
    "metallic": 1,
-   "roughness": 0.4,
+   "roughness": 0.5,
    "range": [
     0.3,
     0.6
@@ -161,7 +161,7 @@
   "chrome": {
    "class": "metal",
    "metallic": 1,
-   "roughness": 0.05,
+   "roughness": 0.15,
    "range": [
     0.02,
     0.15
@@ -184,7 +184,7 @@
   "aluminium": {
    "class": "metal",
    "metallic": 1,
-   "roughness": 0.3,
+   "roughness": 0.42,
    "range": [
     0.1,
     0.6
@@ -206,7 +206,7 @@
   "brushed aluminium": {
    "class": "metal",
    "metallic": 1,
-   "roughness": 0.45,
+   "roughness": 0.55,
    "range": [
     0.3,
     0.65
@@ -291,7 +291,7 @@
   "titanium": {
    "class": "metal",
    "metallic": 1,
-   "roughness": 0.35,
+   "roughness": 0.45,
    "range": [
     0.15,
     0.6
@@ -312,7 +312,7 @@
   "nickel": {
    "class": "metal",
    "metallic": 1,
-   "roughness": 0.25,
+   "roughness": 0.35,
    "range": [
     0.1,
     0.5
@@ -333,7 +333,7 @@
   "platinum": {
    "class": "metal",
    "metallic": 1,
-   "roughness": 0.15,
+   "roughness": 0.3,
    "range": [
     0.05,
     0.4
@@ -395,7 +395,7 @@
   "porcelain (glazed)": {
    "class": "ceramic",
    "metallic": 0,
-   "roughness": 0.1,
+   "roughness": 0.28,
    "range": [
     0.03,
     0.2
@@ -414,7 +414,7 @@
   "glazed ceramic": {
    "class": "ceramic",
    "metallic": 0,
-   "roughness": 0.15,
+   "roughness": 0.32,
    "range": [
     0.05,
     0.3
@@ -436,7 +436,7 @@
   "crackle glaze": {
    "class": "ceramic",
    "metallic": 0,
-   "roughness": 0.18,
+   "roughness": 0.33,
    "range": [
     0.08,
     0.3
@@ -454,7 +454,7 @@
   "stoneware (matte glaze)": {
    "class": "ceramic",
    "metallic": 0,
-   "roughness": 0.5,
+   "roughness": 0.6,
    "range": [
     0.35,
     0.7
@@ -494,7 +494,7 @@
   "urushi lacquer": {
    "class": "coating",
    "metallic": 0,
-   "roughness": 0.05,
+   "roughness": 0.22,
    "range": [
     0.02,
     0.15
@@ -513,7 +513,7 @@
   "gloss lacquer": {
    "class": "coating",
    "metallic": 0,
-   "roughness": 0.08,
+   "roughness": 0.25,
    "range": [
     0.03,
     0.2
@@ -533,7 +533,7 @@
   "varnished wood": {
    "class": "wood",
    "metallic": 0,
-   "roughness": 0.25,
+   "roughness": 0.45,
    "range": [
     0.1,
     0.4
@@ -553,7 +553,7 @@
   "enamel": {
    "class": "coating",
    "metallic": 0,
-   "roughness": 0.12,
+   "roughness": 0.3,
    "range": [
     0.05,
     0.25
@@ -573,7 +573,7 @@
   "gloss paint": {
    "class": "coating",
    "metallic": 0,
-   "roughness": 0.2,
+   "roughness": 0.38,
    "range": [
     0.1,
     0.35
@@ -592,7 +592,7 @@
   "satin paint": {
    "class": "coating",
    "metallic": 0,
-   "roughness": 0.45,
+   "roughness": 0.55,
    "range": [
     0.35,
     0.6
@@ -629,7 +629,7 @@
   "car paint": {
    "class": "coating",
    "metallic": 0,
-   "roughness": 0.1,
+   "roughness": 0.22,
    "range": [
     0.03,
     0.2
@@ -671,7 +671,7 @@
   "oiled hardwood": {
    "class": "wood",
    "metallic": 0,
-   "roughness": 0.45,
+   "roughness": 0.55,
    "range": [
     0.3,
     0.6
@@ -731,7 +731,7 @@
   "glossy plastic": {
    "class": "plastic",
    "metallic": 0,
-   "roughness": 0.2,
+   "roughness": 0.38,
    "range": [
     0.05,
     0.35
@@ -772,7 +772,7 @@
   "vinyl": {
    "class": "plastic",
    "metallic": 0,
-   "roughness": 0.35,
+   "roughness": 0.45,
    "range": [
     0.2,
     0.5
@@ -808,7 +808,7 @@
   "glass": {
    "class": "transparent",
    "metallic": 0,
-   "roughness": 0.02,
+   "roughness": 0.04,
    "range": [
     0.0,
     0.1
@@ -845,7 +845,7 @@
   "crystal": {
    "class": "transparent",
    "metallic": 0,
-   "roughness": 0.01,
+   "roughness": 0.03,
    "range": [
     0.0,
     0.05
@@ -863,7 +863,7 @@
   "quartz / gemstone": {
    "class": "transparent",
    "metallic": 0,
-   "roughness": 0.02,
+   "roughness": 0.04,
    "range": [
     0.0,
     0.1
@@ -883,7 +883,7 @@
   "diamond": {
    "class": "transparent",
    "metallic": 0,
-   "roughness": 0.01,
+   "roughness": 0.02,
    "range": [
     0.0,
     0.03
@@ -900,7 +900,7 @@
   "polished marble": {
    "class": "stone",
    "metallic": 0,
-   "roughness": 0.15,
+   "roughness": 0.32,
    "range": [
     0.05,
     0.3
@@ -940,7 +940,7 @@
   "jade": {
    "class": "stone",
    "metallic": 0,
-   "roughness": 0.2,
+   "roughness": 0.38,
    "range": [
     0.1,
     0.35
@@ -979,7 +979,7 @@
   "mother-of-pearl": {
    "class": "organic",
    "metallic": 0,
-   "roughness": 0.15,
+   "roughness": 0.3,
    "range": [
     0.05,
     0.3
@@ -1019,7 +1019,7 @@
   "amber / resin": {
    "class": "organic",
    "metallic": 0,
-   "roughness": 0.08,
+   "roughness": 0.2,
    "range": [
     0.02,
     0.2
@@ -1038,7 +1038,7 @@
   "leather": {
    "class": "organic",
    "metallic": 0,
-   "roughness": 0.6,
+   "roughness": 0.65,
    "range": [
     0.4,
     0.8
@@ -1055,7 +1055,7 @@
   "patent leather": {
    "class": "organic",
    "metallic": 0,
-   "roughness": 0.1,
+   "roughness": 0.25,
    "range": [
     0.05,
     0.2

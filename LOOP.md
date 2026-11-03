@@ -101,3 +101,5 @@ USDZ for every model, everything committed + pushed, complete tutorial, and an a
   class (empty) so colour priors can still claim it. Transparent cap only for colourless glass (median chroma ≤ 20);
   reassigned bright texels prefer a non-metal. Known misses: watch crystal over the dial (glass 38 %), lacquer box
   nacre panel, jade dragon's rosewood stand.
+- 02:25 Disk full again (0–2 GB; something outside the project keeps filling it). Set 5 images generated (data/testset5) but not processed; priority to the final deliverables.
+- 03:35 Car windows: tried splitting colour regions by height so dark windows on top would not become rubber — reverted: object-specific rule, not generic (user: «eso es hacer trampa»). Car windows stay a known limitation: ENEAS does not find them, the dark-colour prior takes them as rubber.

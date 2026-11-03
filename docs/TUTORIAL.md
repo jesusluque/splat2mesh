@@ -125,6 +125,7 @@ Next to `asset.usda` the flow writes:
 - Direct mode fills solids: a light bulb is solid glass, a vase has no inside.
 - Parts below a few pixels (filaments, eyelids, corks) are often missed; colour priors only cover metals and rubber.
 - A part the segmenter misses and that is not a metal or rubber (a rosewood stand under jade) takes the main material.
+- Dark glass the segmenter misses (car windows) is taken by the near-black rubber prior.
 - Library values are catalogue values, not measurements. Qwen3-VL's own PBR numbers were stereotyped and unstable,
   so they are not used.
 

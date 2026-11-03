@@ -183,13 +183,13 @@ const viewers = [];
 function view(el) {{
   const msg = document.createElement("div"); msg.className = "msg"; msg.textContent = "loading USDZ…"; el.appendChild(msg);
   const r = new THREE.WebGLRenderer({{ antialias: true, alpha: true }});
-  r.setPixelRatio(Math.min(devicePixelRatio, 2)); r.toneMapping = THREE.ACESFilmicToneMapping; r.outputColorSpace = THREE.SRGBColorSpace;
+  r.setPixelRatio(Math.min(devicePixelRatio, 2)); r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 0.92; r.outputColorSpace = THREE.SRGBColorSpace;
   el.appendChild(r.domElement);
   const scene = new THREE.Scene();
   const pm = new THREE.PMREMGenerator(r);
   const setHdr = async (n) => {{ const t = await loadHdr(n); const env = pm.fromEquirectangular(t).texture;
     if (scene.environment) scene.environment.dispose(); scene.environment = env; scene.background = env;
-    scene.backgroundBlurriness = 0.6; scene.backgroundIntensity = 0.6; }};
+    scene.backgroundBlurriness = 0.6; scene.backgroundIntensity = 0.6; scene.environmentIntensity = 0.8; }};
   viewers.push(setHdr); setHdr(window.__hdr || HDRS[0]);
   const cam = new THREE.PerspectiveCamera(30, 1, 0.01, 50);
   const ctl = new OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.autoRotate = true; ctl.autoRotateSpeed = 1.2;
