@@ -11,6 +11,41 @@ from PIL import Image
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, UsdUtils
 
 
+def _decimate_web(stage, keep: float):
+    """Web copy only: decimate every Mesh to `keep` of its faces, keeping its UV charts. The mesh is decimated
+    with the UV seams left open (seam duplicates are separate vertices, so no edge crosses a chart border) and
+    every surviving vertex takes the UV of the original vertices collapsed into it; normals are recomputed."""
+    import numpy as np, trimesh, fast_simplification as fs
+    from pxr import UsdGeom, Vt
+    for prim in stage.Traverse():
+        if prim.GetTypeName() != "Mesh":
+            continue
+        m = UsdGeom.Mesh(prim)
+        V = np.array(m.GetPointsAttr().Get(), np.float64)          # writable copies: the binding refuses views
+        F = np.array(m.GetFaceVertexIndicesAttr().Get(), np.int32).reshape(-1, 3).copy()
+        pv = UsdGeom.PrimvarsAPI(m).GetPrimvar("st")
+        if len(F) < 2000 or not pv or pv.GetInterpolation() != UsdGeom.Tokens.vertex:
+            continue
+        st = np.asarray(pv.Get(), np.float64)
+        _, _, col = fs.simplify(V, F, 1 - keep, return_collapses=True)
+        V2, F2, mp = fs.replay_simplification(V, F, col)
+        ok = mp >= 0
+        uv = np.zeros((len(V2), 2)); cnt = np.zeros(len(V2))
+        first = np.full(len(V2), -1)
+        idx = np.nonzero(ok)[0]
+        first[mp[idx[::-1]]] = idx[::-1]                         # one original vertex per survivor
+        uv = st[np.where(first >= 0, first, 0)]
+        m.GetPointsAttr().Set(Vt.Vec3fArray.FromNumpy(np.asarray(V2, np.float32)))
+        m.GetFaceVertexCountsAttr().Set(Vt.IntArray.FromNumpy(np.full(len(F2), 3, np.int32)))
+        m.GetFaceVertexIndicesAttr().Set(Vt.IntArray.FromNumpy(np.asarray(F2, np.int32).ravel()))
+        nrm = np.asarray(trimesh.Trimesh(V2, F2, process=False).vertex_normals, np.float32)
+        m.GetNormalsAttr().Set(Vt.Vec3fArray.FromNumpy(nrm)); m.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
+        pv.Set(Vt.Vec2fArray.FromNumpy(uv.astype(np.float32)))
+        for sub in prim.GetChildren():                          # face subsets no longer match: drop them
+            if sub.GetTypeName() == "GeomSubset":
+                stage.RemovePrim(sub.GetPath())
+
+
 def make_usdz(src: Path, dst: Path, usd_name: str = "asset.usda") -> dict:
     """Copy asset.usda + textures into a temp dir, rewrite texture paths to bare file names, package as USDZ."""
     tmp = Path(tempfile.mkdtemp())
@@ -73,12 +108,26 @@ def make_usdz(src: Path, dst: Path, usd_name: str = "asset.usda") -> dict:
     M.SetTranslateOnly(t * s)                              # row vectors: p' = (p + t) · s
     xf.AddTransformOp().Set(M)
     st.GetRootLayer().Save()
+    # the web copy is ASCII (three's USDZLoader reads no crate): 17-digit floats triple the geometry size;
+    # 6 significant digits are far below a texel or a visible normal change
+    import re
+    usda_f = tmp / "asset.usda"
+    usda_f.write_text(re.sub(r"-?\d+\.\d{7,}(?:e-?\d+)?", lambda m: f"{float(m.group(0)):.6g}", usda_f.read_text()))
+    st.GetRootLayer().Reload(force=True)                  # the packager reads the cached layer, not the file
     if dst.exists():
         dst.unlink()
     UsdUtils.CreateNewUsdzPackage(str(tmp / "asset.usda"), str(dst))
     if dst.stat().st_size > 20_000_000:                   # keep well under Cloudflare's 25 MiB per file
         for f in tmp.glob("basecolor*.png"):
             im = Image.open(f); im.resize((2048, 2048), Image.LANCZOS).save(f, optimize=True)
+        dst.unlink(); UsdUtils.CreateNewUsdzPackage(str(tmp / "asset.usda"), str(dst))
+    if dst.stat().st_size > 20_000_000:                   # still too big: the geometry (ASCII) — decimate the copy
+        keep = max(0.2, 0.85 * 18_000_000 / dst.stat().st_size)
+        _decimate_web(st, keep)
+        st.GetRootLayer().Save()
+        usda_f.write_text(re.sub(r"-?\d+\.\d{7,}(?:e-?\d+)?", lambda m: f"{float(m.group(0)):.6g}", usda_f.read_text()))
+        st.GetRootLayer().Reload(force=True)
+        info["web_decimated"] = round(keep, 2)
         dst.unlink(); UsdUtils.CreateNewUsdzPackage(str(tmp / "asset.usda"), str(dst))
     shutil.rmtree(tmp, ignore_errors=True)
     return info

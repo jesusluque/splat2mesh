@@ -1,9 +1,9 @@
 #!/bin/bash
 # Build the web gallery from the latest version of every object (one copy each). Titles must not contain ':'.
 cd "$(dirname "$0")/.."
-ARGS=("lucky_cat_v9=out/mat_cat3:Lucky cat — porcelain, gold, lacquer:data/inbox/maneki_white.png:out/stills/mat_cat3.png")
+ARGS=("lucky_cat_v10=out/mat_cat3:Lucky cat — porcelain, gold, lacquer:data/inbox/maneki_white.png:out/stills/mat_cat3.png")
 add() { local set=$1 dir=$2; shift 2; local i=0; for nt in "$@"; do n=${nt%%=*}; t=${nt#*=}
-  a=out/$dir/0$i/usd; [ -f $a/asset.usda ] && ARGS+=("${n}_v9=$a:$t:data/$set/img/0$i.png:out/stills/${dir}_0$i.png"); i=$((i+1)); done; }
+  a=out/$dir/0$i/usd; [ -f $a/asset.usda ] && ARGS+=("${n}_v10=$a:$t:data/$set/img/0$i.png:out/stills/${dir}_0$i.png"); i=$((i+1)); done; }
 add testset testset_v5 teapot="Porcelain teapot" brass_candlestick="Brass candlestick" walnut_owl="Walnut owl" \
   red_lacquer_bowl="Red lacquer bowl" mixed_lamp="Lamp — oak, steel, porcelain" lacquer_box="Lacquer box — brass, nacre" \
   alu_robot="Aluminium robot" celadon_vase="Celadon vase with kintsugi"
