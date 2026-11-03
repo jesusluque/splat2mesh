@@ -49,24 +49,41 @@ if reuse:                     # only the phrases the saved masks do not have yet
     run_items = [(c, t) for c, t in items if t not in have]
     if run_items:
         print("ENEAS for new phrases only:", [t for _, t in run_items])
+import contextlib, time as _time
+@contextlib.contextmanager
+def _gpu_lock(path=Path.home() / ".cache/splat2mesh_eneas.lock"):
+    """One ENEAS job at a time on the remote GPU (two on an 8 GB card thrash)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    while True:
+        try:
+            path.mkdir(); break
+        except FileExistsError:
+            if _time.time() - path.stat().st_mtime > 3600:   # stale lock
+                path.rmdir()
+            _time.sleep(10)
+    try:
+        yield
+    finally:
+        path.rmdir()
 if not reuse or run_items:
-  if LINUX:
-    subprocess.run(["ssh", HOST, f"rm -rf ~/{win}; mkdir -p ~/{win}/frames"], check=False)
-  else:
-    subprocess.run(["ssh", HOST, f'rmdir /s /q "{win}" 2>nul & mkdir "{win}\\frames"'], check=False)
-  subprocess.run(["scp", "-q", *map(str, frames), f"{HOST}:{win}/frames/"], check=True)
-  subprocess.run(["scp", "-q", str(ROOT / "scripts/eneas_seq.py"), f"{HOST}:{win}/"], check=True)
-  q = " ".join("'" + t.replace("'", "") + "'" for _, t in run_items)
-  inner = f"~/.local/bin/uv run python {wsl}/eneas_seq.py {wsl}/frames {wsl}/masks.npz {ann},{ann2} {q}"
-  cmd = (f"cd ~/splat2mesh_eneas/eneas && {inner}" if LINUX
-         else f'wsl -d Ubuntu-24.04 -- bash -lc "cd ~/splat2mesh/eneas && {inner}"')
-  print(subprocess.run(["ssh", HOST, cmd], capture_output=True, text=True).stdout.replace("\x00", "")[-1500:])
-  if reuse:                 # merge the new phrases into the saved masks
-      subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(asset / "mat" / "masks_new.npz")], check=True)
-      merged = {**dict(np.load(asset / "mat" / "masks.npz")), **dict(np.load(asset / "mat" / "masks_new.npz"))}
-      np.savez_compressed(asset / "mat" / "masks.npz", **merged); (asset / "mat" / "masks_new.npz").unlink()
-  else:
-      subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(asset / "mat" / "masks.npz")], check=True)
+ with _gpu_lock():
+   if LINUX:
+     subprocess.run(["ssh", HOST, f"rm -rf ~/{win}; mkdir -p ~/{win}/frames"], check=False)
+   else:
+     subprocess.run(["ssh", HOST, f'rmdir /s /q "{win}" 2>nul & mkdir "{win}\\frames"'], check=False)
+   subprocess.run(["scp", "-q", *map(str, frames), f"{HOST}:{win}/frames/"], check=True)
+   subprocess.run(["scp", "-q", str(ROOT / "scripts/eneas_seq.py"), f"{HOST}:{win}/"], check=True)
+   q = " ".join("'" + t.replace("'", "") + "'" for _, t in run_items)
+   inner = f"~/.local/bin/uv run python {wsl}/eneas_seq.py {wsl}/frames {wsl}/masks.npz {ann},{ann2} {q}"
+   cmd = (f"cd ~/splat2mesh_eneas/eneas && {inner}" if LINUX
+          else f'wsl -d Ubuntu-24.04 -- bash -lc "cd ~/splat2mesh/eneas && {inner}"')
+   print(subprocess.run(["ssh", HOST, cmd], capture_output=True, text=True).stdout.replace("\x00", "")[-1500:])
+   if reuse:                 # merge the new phrases into the saved masks
+       subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(asset / "mat" / "masks_new.npz")], check=True)
+       merged = {**dict(np.load(asset / "mat" / "masks.npz")), **dict(np.load(asset / "mat" / "masks_new.npz"))}
+       np.savez_compressed(asset / "mat" / "masks.npz", **merged); (asset / "mat" / "masks_new.npz").unlink()
+   else:
+       subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(asset / "mat" / "masks.npz")], check=True)
 z = np.load(asset / "mat" / "masks.npz")
 def _fit(m, n):            # ENEAS may return fewer frames than sent: pad with empty views
     if m.shape[0] >= n:
