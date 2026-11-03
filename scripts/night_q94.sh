@@ -22,3 +22,7 @@ echo "$(date +%H:%M) done redo cloisonne" >> out/night_progress.log
 echo "$(date +%H:%M) done redo boot" >> out/night_progress.log
 .venv/bin/python scripts/materials_eneas3d.py out/testset2_v5/07/usd out/testset2/07/idol_input.png "$(cat out/testset2_v5/07/materials.txt)" --reuse-masks > out/night_redo_car.log 2>&1
 echo "$(date +%H:%M) done redo car" >> out/night_progress.log
+.venv/bin/python scripts/materials_eneas3d.py out/testset4_v5/00/usd out/testset4/00/idol_input.png "$(cat out/testset4_v5/00/materials.txt)" --reuse-masks > out/night_redo_watch.log 2>&1
+echo "$(date +%H:%M) done redo watch" >> out/night_progress.log
+.venv/bin/python scripts/materials_eneas3d.py out/testset4_v5/01/usd out/testset4/01/idol_input.png "$(cat out/testset4_v5/01/materials.txt)" --reuse-masks > out/night_redo_tiffany.log 2>&1
+echo "$(date +%H:%M) done redo tiffany" >> out/night_progress.log

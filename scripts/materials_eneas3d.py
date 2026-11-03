@@ -65,7 +65,7 @@ for k in list(masks):
     cover = (masks[k] & obj).sum() / max(obj.sum(), 1)
     thin = any(w in k.split("|", 1)[1] for w in ("rim", "edge", "line", "wire", "trim", "hinge", "knob", "filament",
                                                   "inlay", "band", "stripe", "cap", "cork", "wick", "chain", "eyelet"))
-    if cover > (0.15 if thin else 0.5):
+    if cover > (0.15 if thin else 0.75):
         print("dropped (covers", round(float(cover), 2), "of the object):", k)
         masks.pop(k)
 print("annotation frame", ann, "| phrases", list(masks))

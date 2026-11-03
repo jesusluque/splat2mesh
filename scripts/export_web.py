@@ -25,8 +25,17 @@ def make_usdz(src: Path, dst: Path) -> dict:
             if f and f.Get():
                 p = Path(f.Get().path)
                 srcfile = (src / p).resolve()
-                shutil.copy(srcfile, tmp / srcfile.name)
-                f.Set(Sdf.AssetPath(srcfile.name))
+                name = srcfile.name
+                im = Image.open(srcfile)
+                if name.startswith("basecolor"):           # colour: PNG (three's USDZLoader reads PNG only), ≤ 3072²
+                    if not (tmp / name).exists():
+                        w = min(im.width, 3072)
+                        im.convert("RGB").resize((w, w), Image.LANCZOS).save(tmp / name, optimize=True)
+                else:                                      # data maps: half size is plenty
+                    if not (tmp / name).exists():
+                        w = max(im.width // 2, 512)
+                        im.resize((w, w), Image.BILINEAR).save(tmp / name, optimize=True)
+                f.Set(Sdf.AssetPath(name))
                 if srcfile.name in ("roughness.png", "metallic.png"):
                     info["pbr"] = True
     # place on the floor, Y up, ~0.3 m tall, so every model is framed alike
@@ -43,6 +52,10 @@ def make_usdz(src: Path, dst: Path) -> dict:
     if dst.exists():
         dst.unlink()
     UsdUtils.CreateNewUsdzPackage(str(tmp / "asset.usda"), str(dst))
+    if dst.stat().st_size > 20_000_000:                   # keep well under Cloudflare's 25 MiB per file
+        for f in tmp.glob("basecolor*.png"):
+            im = Image.open(f); im.resize((2048, 2048), Image.LANCZOS).save(f, optimize=True)
+        dst.unlink(); UsdUtils.CreateNewUsdzPackage(str(tmp / "asset.usda"), str(dst))
     shutil.rmtree(tmp, ignore_errors=True)
     return info
 
