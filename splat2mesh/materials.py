@@ -372,6 +372,36 @@ def from_view_masks(spec_json, orbit_dir, masks: dict) -> dict:
             maj = np.bincount(known, minlength=len(names)).argmax()
             fill = sel & (cls_tex < 0)
             cls_tex[fill] = maj
+    # thin metal parts ENEAS cannot find (kintsugi lines, gilt rims): a named metal with no texels claims the
+    # colour regions whose hue matches its F0 colour (and that are saturated enough to be coloured metal)
+    for i, n in enumerate(names):
+        cls = n.split("|")[0]; L = _lib(cls)
+        if L.get("metallic", 0) < 0.5 or not L.get("f0") or (cls_tex == i).any():
+            continue
+        if any((cls_tex == j).any() for j, m in enumerate(names) if m.split("|")[0] == cls):
+            continue
+        if np.ptp(L["f0"]) < 0.08:                       # achromatic metal (chrome, silver, steel, aluminium)
+            for j, r in enumerate(spec["regions"]):
+                if np.hypot(r["lab"][1], r["lab"][2]) < 10 and r["lab"][0] > 55:
+                    cls_tex[mask & (reg == j)] = i; print(f"colour prior: region {j} → {cls} (grey metal)")
+            continue
+        f0lab = _srgb_to_lab(np.where(np.array(L["f0"]) <= 0.0031308, np.array(L["f0"]) * 12.92,
+                                      1.055 * np.power(np.array(L["f0"]), 1 / 2.4) - 0.055)[None])[0]
+        h0 = np.degrees(np.arctan2(f0lab[2], f0lab[1]))
+        for j, r in enumerate(spec["regions"]):
+            a, b = r["lab"][1], r["lab"][2]
+            chroma = np.hypot(a, b); h = np.degrees(np.arctan2(b, a))
+            if chroma > 25 and abs((h - h0 + 180) % 360 - 180) < 20 and np.hypot(f0lab[1], f0lab[2]) > 15:
+                sel = mask & (reg == j)
+                cls_tex[sel] = i
+                print(f"colour prior: region {j} → {cls}")
+    # unfound rubber / black parts: the near-black regions
+    for i, n in enumerate(names):
+        cls = n.split("|")[0]
+        if cls in ("rubber", "matte plastic") and not (cls_tex == i).any():
+            for j, r in enumerate(spec["regions"]):
+                if r["lab"][0] < 20:
+                    cls_tex[mask & (reg == j)] = i; print(f"colour prior: region {j} → {cls} (dark)")
     # every colour region also gets the majority class of its texels (fallback for apply())
     for j, r in enumerate(spec["regions"]):
         sel = mask & (reg == j)
@@ -383,7 +413,7 @@ def from_view_masks(spec_json, orbit_dir, masks: dict) -> dict:
         r.update(material=cls, metallic=PRESET[cls][0], roughness=PRESET[cls][1])
     out = Path(spec["asset"])
     classes = [n.split("|")[0] for n in names]
-    np.save(out / "mat" / "texel_class.npy", cls_tex)
+    np.save(out / "mat" / "texel_class.npy", cls_tex.astype(np.int16))
     spec["texel_classes"] = names
     spec_p.write_text(json.dumps(spec, indent=1))
     share = {n: round(float((cls_tex[mask] == i).mean()), 4) for i, n in enumerate(names)}
@@ -525,7 +555,7 @@ def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
             continue
         if L.get("metallic", 0) >= 0.5 and L.get("f0"):
             lum0 = lin(base[sel]).mean(-1)
-            dark = lum0 < 0.25 * np.median(lum0)              # ink/paint/enamel on the metal: not metal
+            dark = lum0 < 0.08                                # black/dark ink or enamel on the metal (linear lum): not metal
             if dark.any():
                 ys, xs = np.nonzero(sel)
                 Mmap[ys[dark], xs[dark]] = 0.0; Rmap[ys[dark], xs[dark]] = 0.3

@@ -10,7 +10,7 @@ from pxr import Usd, UsdGeom; import sys
 s=Usd.Stage.Open('$ASSET'); b=UsdGeom.BBoxCache(0,['default','render']).ComputeWorldBound(s.GetPseudoRoot()).ComputeAlignedRange()
 c=(b.GetMin()+b.GetMax())/2; r=(b.GetMax()-b.GetMin()).GetLength()/2; print(c[0],c[1],c[2],r)")
 for ((i=0;i<N;i++)); do
-  read EX EY EZ < <(python3 -c "import math;a=2*math.pi*$i/$N;e=math.radians($ELEV);d=$R*2.9;print($CX+d*math.sin(a)*math.cos(e),$CY+d*math.sin(e),$CZ+d*math.cos(a)*math.cos(e))")
+  read EX EY EZ < <(python3 -c "import math;a=2*math.pi*$i/$N;e=math.radians($ELEV);d=$R*3.8;print($CX+d*math.sin(a)*math.cos(e),$CY+d*math.sin(e),$CZ+d*math.cos(a)*math.cos(e))")
   bash ~/luc/athenea-gpu/shared.sh bash -c "export ATHENEA_SHADER_DIR=$B/shaders; timeout 300 $B/bin/athenea stage '$ASSET' --eye $EX $EY $EZ --target $CX $CY $CZ --up 0 1 0 --focal 50 --size ${SIZE}x${SIZE} --default-lights --technique rt --path-total $SPP --denoise -o $D/f.exr > /dev/null 2>&1"
   oiiotool $D/f.exr --ch R,G,B --colorconvert linear sRGB -d uint8 -o $D/f_$(printf %04d $i).png 2>/dev/null
 done

@@ -87,3 +87,11 @@ USDZ for every model, everything committed + pushed, complete tutorial, and an a
   authority on the specific material ("gold" → "brass"; family missing from the prompt → the prompt's unused
   material, e.g. red lacquer bowl described as porcelain → urushi lacquer); keyword matching by whole word
   ("pla" no longer matches "plain"). Owl and bowl queued for redo.
+- 01:10 DISK FULL on the Mac (159 MB free of 926 GB; project ~6 GB, the rest is other data) → silver teapot and
+  lantern failed in set 3. Freed ~5 GB of superseded outputs (v2–v4, pawn/2DGS tests, intermediate EXR views);
+  texel_class.npy now int16 (134 MB → 17 MB per object). Redo of both on ixwin queued. User warned.
+- Video queue bug: the turntable script read stdin and ate the heredoc list ("ine_glass") → children now < /dev/null.
+- 01:30 Sets 1–3 done; set 4 flow on render94. Extra automatic rules: thin parts (rim, wire, hinge…) capped at 15 %
+  of the object; secondary part > 50 % dropped; missing ENEAS frames padded; colour priors for unfound grey metals
+  (low chroma, bright), coloured metals (F0 hue) and rubber (near black). Redos queued: owl, bowl, box, vase,
+  cloisonné, boot, car. Web v6: 33 objects. Disk ~4 GB free.

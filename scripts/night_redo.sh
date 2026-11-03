@@ -8,3 +8,5 @@ echo "$(date +%H:%M) done redo owl" >> out/night_progress.log
 echo "urushi lacquer: the bowl; gold: the gold rim" > out/testset_v5/03/materials.txt
 .venv/bin/python scripts/materials_eneas3d.py out/testset_v5/03/usd out/testset/03/idol_input.png "$(cat out/testset_v5/03/materials.txt)" > out/night_redo_bowl.log 2>&1
 echo "$(date +%H:%M) done redo bowl" >> out/night_progress.log
+SPLAT2MESH_ENEAS_HOST=render94 .venv/bin/python scripts/materials_eneas3d.py out/testset_v5/05/usd out/testset/05/idol_input.png "$(cat out/testset_v5/05/materials.txt)" --reuse-masks > out/night_redo_box.log 2>&1
+echo "$(date +%H:%M) done redo box" >> out/night_progress.log

@@ -50,7 +50,24 @@ if not reuse:
   print(subprocess.run(["ssh", HOST, cmd], capture_output=True, text=True).stdout.replace("\x00", "")[-1500:])
   subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(asset / "mat" / "masks.npz")], check=True)
 z = np.load(asset / "mat" / "masks.npz")
-masks = {f"{cls}|{ph}": z[ph] for cls, ph in items if ph in z.files}
+def _fit(m, n):            # ENEAS may return fewer frames than sent: pad with empty views
+    if m.shape[0] >= n:
+        return m[:n]
+    return np.concatenate([m, np.zeros((n - m.shape[0],) + m.shape[1:], bool)])
+masks = {f"{cls}|{ph}": _fit(z[ph], len(frames)) for cls, ph in items if ph in z.files}
+# grounding sanity: a secondary part (not the first, main body) that covers most of the object is a mislocated
+# phrase ("the side inlay" → the whole box) — drop it
+obj = np.stack([np.asarray(Image.open(f).convert("L"), np.float32) < 250 for f in frames])
+first = f"{items[0][0]}|{items[0][1]}" if items else None
+for k in list(masks):
+    if k == first:
+        continue
+    cover = (masks[k] & obj).sum() / max(obj.sum(), 1)
+    thin = any(w in k.split("|", 1)[1] for w in ("rim", "edge", "line", "wire", "trim", "hinge", "knob", "filament",
+                                                  "inlay", "band", "stripe", "cap", "cork", "wick", "chain", "eyelet"))
+    if cover > (0.15 if thin else 0.5):
+        print("dropped (covers", round(float(cover), 2), "of the object):", k)
+        masks.pop(k)
 print("annotation frame", ann, "| phrases", list(masks))
 if not masks:          # ENEAS found nothing: whole object = the description's main material
     import json as _j
