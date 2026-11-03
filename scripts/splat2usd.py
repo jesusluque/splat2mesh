@@ -152,7 +152,7 @@ def main():
     ap.add_argument("--smooth", type=float, default=0.0, help="Taubin smoothing factor X (0 off, 1 = 10 it.; glass: 3+)")
     ap.add_argument("--direct", action="store_true",
                     help="no render: mesh from the splat's opacity field (~1 min; good on Idol splats, poor on thin surface splats)")
-    ap.add_argument("--max-folds", type=int, default=500,
+    ap.add_argument("--max-folds", type=int, default=300,
                     help="--direct: above this many folded edges (dihedral > 120°) use the render path instead")
     ap.add_argument("--render-tex", type=int, default=2048, help="texture size cap on the render path")
     ap.add_argument("--skip-done", action="store_true", help="skip inputs whose report.json says ok")

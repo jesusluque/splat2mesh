@@ -25,7 +25,7 @@ for d in items:
     if not (o / "asset.usda").exists():
         r = run_direct(d / f"{d.name}.ply", o, y_down=True)
         print(d.name, "direct", r["components"], r["non_manifold_edges"], r["uv_charts"], "folds", r["folds"], flush=True)
-        if r["folds"] > 500:                       # crumpled walls: render path (athenea) instead
+        if r["folds"] > 300:                       # crumpled walls: render path (athenea) instead
             import shutil
             tmp = out / d.name / "render_path"
             subprocess.run([sys.executable, str(ROOT / "scripts/splat2usd.py"), str(d / f"{d.name}.ply"), "--y-down",

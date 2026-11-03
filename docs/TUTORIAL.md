@@ -78,6 +78,15 @@ For every object:
 7. **The library** (`splat2mesh/material_library.json`, 58 entries) gives roughness, metallic, IOR, metal F0 colour,
    transmission and subsurface.
 
+8. **Finish pass**, so glossy pieces look finished rather than scanned:
+   - *shading normals* come from a smoothed copy of the mesh (positions untouched), so reflections on porcelain,
+     lacquer and polished metal flow instead of showing the fused surface's small bumps;
+   - *metals* take the physical F0 colour times only the **fine** detail of the baked texture (high-pass of
+     log-luminance): hammering and engraving stay, frozen reflections go;
+   - *the side Idol invented* (whatever the input picture did not show) is lifted to the brightness of the same
+     material on the seen side when it came out much darker (dark backs, black bases);
+   - *glass, crystal, jade and wax* objects get their vertex positions smoothed as well.
+
 What lands in the USD:
 
 | Map | Source |
@@ -102,8 +111,11 @@ Next to `asset.usda` the flow writes:
 
 ## 5. Viewing and sharing
 
-- **Web**: `scripts/export_web.py` builds a USD-only gallery (three.js `USDZLoader`, four switchable CC0 HDRIs;
-  iPhone opens the same USDZ in AR). Live: <https://splat2mesh.lucab.co.uk>.
+- **Web**: `scripts/export_web.py` builds a USD-only gallery: each card shows a path-traced still and loads the USDZ
+  only when clicked (three.js `USDZLoader`, four switchable CC0 HDRIs, at most four live viewers). The web copy is the
+  per-part USD; a small JSON per model lets the viewer turn glass parts into a physical transmission material and
+  jade/wax into a translucent one, which `UsdPreviewSurface` cannot express. iPhone opens the same USDZ in AR.
+  Live: <https://splat2mesh.lucab.co.uk>.
 - **Video**: `scripts/athenea_turntable.sh asset.usda out.mp4` path traces a turntable with athenea, frame by frame,
   and encodes it with ffmpeg.
 

@@ -11,10 +11,10 @@ from PIL import Image
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, UsdUtils
 
 
-def make_usdz(src: Path, dst: Path) -> dict:
+def make_usdz(src: Path, dst: Path, usd_name: str = "asset.usda") -> dict:
     """Copy asset.usda + textures into a temp dir, rewrite texture paths to bare file names, package as USDZ."""
     tmp = Path(tempfile.mkdtemp())
-    stage = Usd.Stage.Open(str(src / "asset.usda"))
+    stage = Usd.Stage.Open(str(src / usd_name))
     stage.GetRootLayer().Export(str(tmp / "asset.usda"))
     st = Usd.Stage.Open(str(tmp / "asset.usda"))
     info = {"pbr": False}
@@ -38,9 +38,33 @@ def make_usdz(src: Path, dst: Path) -> dict:
                 f.Set(Sdf.AssetPath(name))
                 if srcfile.name in ("roughness.png", "metallic.png"):
                     info["pbr"] = True
+    # three's USDZLoader resolves a material only inside the Xform it is building: copy each part's material
+    # under its own Xform and rebind (web copy only; the master USD keeps /Asset/Materials)
+    for grp in ("/Asset/Parts", "/Asset/MaterialGroups"):
+        gp = st.GetPrimAtPath(grp)
+        if not gp:
+            continue
+        layer = st.GetRootLayer()
+        for xf_prim in gp.GetChildren():
+            geom = xf_prim.GetChild("Geom")
+            if not geom:
+                continue
+            rel = UsdShade.MaterialBindingAPI(geom).GetDirectBindingRel()
+            tg = rel.GetTargets()
+            if not tg:
+                continue
+            mdst = xf_prim.GetPath().AppendChild("Mat")
+            Sdf.CopySpec(layer, tg[0], layer, mdst)
+            # fix internal connections that still point at the old material path
+            for p in Usd.PrimRange(st.GetPrimAtPath(mdst)):
+                for a in p.GetAttributes():
+                    srcs = a.GetConnections()
+                    if srcs:
+                        a.SetConnections([Sdf.Path(str(c).replace(str(tg[0]), str(mdst))) for c in srcs])
+            rel.SetTargets([mdst])
     # place on the floor, Y up, ~0.3 m tall, so every model is framed alike
-    geom = UsdGeom.Mesh(st.GetPrimAtPath("/Asset/Geom"))
-    lo, hi = geom.GetExtentAttr().Get()
+    rng = UsdGeom.BBoxCache(0, ["default", "render"]).ComputeWorldBound(st.GetPrimAtPath("/Asset")).ComputeAlignedRange()
+    lo, hi = rng.GetMin(), rng.GetMax()
     s = 0.3 / max(hi[1] - lo[1], 1e-9)
     xf = UsdGeom.Xformable(st.GetPrimAtPath("/Asset"))
     xf.ClearXformOpOrder()
@@ -74,7 +98,13 @@ for spec in sys.argv[2:]:
     parts = rest.split(":")
     src = Path(parts[0]); title = parts[1] if len(parts) > 1 and parts[1] else name
     img = Path(parts[2]) if len(parts) > 2 and parts[2] else None
-    info = make_usdz(src, out / "models" / f"{name}.usdz")
+    poster = Path(parts[3]) if len(parts) > 3 and parts[3] else None
+    use_parts = (src / "asset_parts.usda").exists() and (src / "parts.json").exists()
+    info = make_usdz(src, out / "models" / f"{name}.usdz", "asset_parts.usda" if use_parts else "asset.usda")
+    if use_parts:
+        shutil.copy(src / "parts.json", out / "models" / f"{name}_parts.json")
+    if poster and poster.exists():
+        Image.open(poster).convert("RGB").resize((640, 640), Image.LANCZOS).save(out / "models" / f"{name}_poster.jpg", quality=86)
     if img and img.exists():
         Image.open(img).convert("RGB").resize((512, 512), Image.LANCZOS).save(out / "models" / f"{name}_input.jpg", quality=85)
     rep = {}
@@ -82,6 +112,8 @@ for spec in sys.argv[2:]:
         if r.exists():
             j = json.loads(r.read_text()); rep = dict(j.get("mesh", j)); rep["psnr"] = j.get("qa", {}).get("psnr_mean"); break
     rep["pbr"] = info["pbr"]
+    rep["poster"] = bool(poster and poster.exists())
+    rep["parts"] = use_parts
     cards.append((name, title, bool(img and img.exists()), rep))
     print(name, "pbr" if info["pbr"] else "colour")
 
@@ -96,7 +128,9 @@ for name, title, has_img, rep in cards:
         stats += f" · PSNR {rep['psnr']:.1f} dB"
     src_img = f'<img class="src" src="models/{name}_input.jpg" alt="input image">' if has_img else ""
     items.append(f'''<article>
-  <div class="view" data-usdz="models/{name}.usdz"></div>
+  <div class="view" data-usdz="models/{name}.usdz" data-parts="{'models/' + name + '_parts.json' if rep.get('parts') else ''}" tabindex="0" role="button" aria-label="Load the 3D model of {html.escape(title)}">
+    {f'<img class="poster" src="models/{name}_poster.jpg" alt="{html.escape(title)}" loading="lazy">' if rep.get("poster") else ""}
+    <span class="hint">Click to load 3D</span></div>
   <div class="meta">{src_img}<div><h2>{html.escape(title)}</h2><p>{stats}</p>
   <p class="dl"><a href="models/{name}.usdz" download>USDZ</a> · <a rel="ar" href="models/{name}.usdz">AR (iOS)</a></p></div></div>
 </article>''')
@@ -115,6 +149,11 @@ header p {{ margin:0; color:var(--muted) }} header a {{ color:var(--accent) }}
 main {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:16px; padding:16px; max-width:1200px; margin:auto }}
 article {{ background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden }}
 .view {{ position:relative; width:100%; height:340px; background:linear-gradient(#ffffff00,#0000000d) }} .view canvas {{ display:block; width:100%; height:100% }}
+.view {{ cursor:pointer }} .view.live {{ cursor:grab }}
+.view .poster {{ position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#cccccc }}
+.view .hint {{ position:absolute; left:50%; bottom:14px; transform:translateX(-50%); padding:6px 14px; border-radius:20px;
+  background:var(--card); color:var(--fg); border:1px solid var(--line); font-size:13px }}
+.view.live .poster, .view.live .hint {{ display:none }}
 .view .msg {{ position:absolute; inset:0; display:grid; place-items:center; color:var(--muted); font-size:13px }}
 .meta {{ display:flex; gap:12px; padding:12px 14px; align-items:flex-start }} .src {{ width:64px; height:64px; object-fit:cover; border-radius:8px; border:1px solid var(--line) }}
 h2 {{ font-size:16px; margin:0 0 2px }} .meta p {{ margin:0; color:var(--muted); font-size:13px }} .dl a {{ color:var(--accent) }}
@@ -151,12 +190,36 @@ function view(el) {{
   const setHdr = async (n) => {{ const t = await loadHdr(n); const env = pm.fromEquirectangular(t).texture;
     if (scene.environment) scene.environment.dispose(); scene.environment = env; scene.background = env;
     scene.backgroundBlurriness = 0.6; scene.backgroundIntensity = 0.6; }};
-  viewers.push(setHdr); setHdr(HDRS[0]);
+  viewers.push(setHdr); setHdr(window.__hdr || HDRS[0]);
   const cam = new THREE.PerspectiveCamera(30, 1, 0.01, 50);
   const ctl = new OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.autoRotate = true; ctl.autoRotateSpeed = 1.2;
   const resize = () => {{ const w = el.clientWidth, h = el.clientHeight; r.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix(); }};
   new ResizeObserver(resize).observe(el); resize();
-  loader.load(el.dataset.usdz, (g) => {{
+  const partsP = el.dataset.parts ? fetch(el.dataset.parts).then(r => r.json()).catch(() => ({{}})) : Promise.resolve({{}});
+  loader.load(el.dataset.usdz, async (g) => {{
+    const parts = await partsP;
+    g.traverse(o => {{ if (o.isMesh && o.name === "Asset" && Object.keys(parts).length) o.material = new THREE.MeshBasicMaterial({{ visible: false }}); }});   // loader duplicates the first part at the root (its children are the parts: keep them)
+    g.traverse(o => {{
+      if (!o.isMesh) return;
+      const p = parts[o.name] || (o.parent && parts[o.parent.name]);
+      if (!p) return;
+      const m = o.material;
+      if (p.transmission > 0) {{          // glass / crystal: physical transmission (USDZLoader has no opacity)
+        // tint from the part's texture (median colour), thin-ish glass, absorption tint over a short distance
+        let tint = new THREE.Color(0xffffff);
+        if (m.map && m.map.image) {{ try {{ const c = document.createElement("canvas"); c.width = c.height = 16;
+          const x = c.getContext("2d"); x.drawImage(m.map.image, 0, 0, 16, 16); const d = x.getImageData(0, 0, 16, 16).data;
+          let r = 0, g2 = 0, b = 0; for (let i = 0; i < d.length; i += 4) {{ r += d[i]; g2 += d[i + 1]; b += d[i + 2]; }}
+          const n = d.length / 4, mx = Math.max(r, g2, b) / n || 1; tint = new THREE.Color(r / n / mx, g2 / n / mx, b / n / mx); }} catch (e) {{}} }}
+        o.material = new THREE.MeshPhysicalMaterial({{ color: 0xffffff, metalness: 0, roughness: Math.min(p.roughness ?? 0.03, 0.08),
+          transmission: 1, ior: p.ior || 1.5, thickness: 0.04, attenuationColor: tint, attenuationDistance: 0.25,
+          side: THREE.DoubleSide, specularIntensity: 1, envMapIntensity: 1.2 }});
+      }} else if (p.subsurface > 0) {{    // jade, wax, marble: a soft sheen of transmission as a cheap subsurface look
+        o.material = new THREE.MeshPhysicalMaterial({{ map: m.map, roughness: 0.35, metalness: 0,
+          transmission: Math.min(0.5, p.subsurface * 0.6), thickness: 0.15, ior: p.ior || 1.5,
+          attenuationColor: new THREE.Color(0.75, 0.9, 0.75), attenuationDistance: 0.3, sheen: 0.3, sheenRoughness: 0.6 }});
+      }}
+    }});
     msg.remove(); scene.add(g);
     const box = new THREE.Box3().setFromObject(g), c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3()).length();
     ctl.target.copy(c); cam.position.copy(c).add(new THREE.Vector3(0.35, 0.18, 1).normalize().multiplyScalar(s * 1.6));
@@ -164,10 +227,19 @@ function view(el) {{
   }}, undefined, (e) => {{ msg.textContent = "could not load " + el.dataset.usdz; console.error(e); }});
   let visible = false; new IntersectionObserver(([en]) => visible = en.isIntersecting).observe(el);
   r.setAnimationLoop(() => {{ if (!visible) return; ctl.update(); r.render(scene, cam); }});
+  el.__dispose = () => {{ r.setAnimationLoop(null); r.dispose(); r.forceContextLoss(); const i = viewers.indexOf(setHdr); if (i >= 0) viewers.splice(i, 1); }};
 }}
-document.querySelectorAll(".view").forEach(view);
+const live = [];
+document.querySelectorAll(".view").forEach(el => {{
+  const go = () => {{ if (el.classList.contains("live")) return;
+    if (live.length >= 4) {{ const old = live.shift(); old.__dispose && old.__dispose(); old.classList.remove("live");
+      old.querySelectorAll("canvas, .msg").forEach(n => n.remove()); }}
+    el.classList.add("live"); live.push(el); view(el); }};
+  el.addEventListener("click", go);
+  el.addEventListener("keydown", e => {{ if (e.key === "Enter" || e.key === " ") {{ e.preventDefault(); go(); }} }});
+}});
 let cur = 0, auto = true;
-const pick = (n) => {{ viewers.forEach(f => f(n)); document.querySelectorAll(".hdr button").forEach(b => b.classList.toggle("on", b.dataset.hdr === (auto ? "auto" : n))); }};
+const pick = (n) => {{ window.__hdr = n; viewers.forEach(f => f(n)); document.querySelectorAll(".hdr button").forEach(b => b.classList.toggle("on", b.dataset.hdr === (auto ? "auto" : n))); }};
 document.querySelectorAll(".hdr button").forEach(b => b.onclick = () => {{ auto = b.dataset.hdr === "auto"; if (!auto) pick(b.dataset.hdr); else pick(HDRS[cur]); }});
 setInterval(() => {{ if (auto) {{ cur = (cur + 1) % HDRS.length; pick(HDRS[cur]); }} }}, 8000);
 </script>

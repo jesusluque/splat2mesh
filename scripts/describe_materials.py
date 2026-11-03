@@ -30,6 +30,7 @@ INSTR = ("You prepare inputs for a segmentation model that finds one object part
          "- Each part is a short noun phrase a segmenter can find, starting with 'the' (e.g. 'the lid', 'the handle', "
          "'the gold rim'). One part per phrase; do not join two parts with 'and'.\n"
          "- 2 to 6 parts in total; the largest part first within each material.\n"
+         "- Always list visible glass or transparent parts (windows, lenses, dials' crystals, bulbs) as their own part.\n"
          "- Output ONLY lines of the form  material: part, part\n{hint}")
 
 for img_path, pr in zip(a.images, prompts):

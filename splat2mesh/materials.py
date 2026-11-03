@@ -37,15 +37,29 @@ def _kmeans(X, k, iters=30, seed=0):
     return C, lab
 
 
+_RASTER = {}
+
+
+def _raster(asset_dir: Path, R: int):
+    """(pos, nrm, mask) of the UV atlas, memoised per asset.usda mtime — rasterising 80k faces into 4096² is the
+    slowest step and every stage needs it."""
+    import os
+    key = (str(Path(asset_dir).resolve()), R, os.path.getmtime(Path(asset_dir) / "asset.usda"))
+    if key not in _RASTER:
+        from .rerender import load_usd_textured
+        from .texture import rasterize_uv
+        import trimesh
+        V, F, st, _ = load_usd_textured(str(Path(asset_dir) / "asset.usda"))
+        n = trimesh.Trimesh(V, F, process=False).vertex_normals
+        _RASTER.clear()
+        _RASTER[key] = rasterize_uv(V.astype(np.float64), F, st, n, R)
+    return _RASTER[key]
+
+
 def _texture_and_mask(asset_dir: Path):
     tex = np.asarray(Image.open(asset_dir / "basecolor.png").convert("RGB"), np.float32)[::-1] / 255
-    from .rerender import load_usd_textured
-    from .texture import rasterize_uv
-    V, F, st, _ = load_usd_textured(str(asset_dir / "asset.usda"))
-    import trimesh
-    n = trimesh.Trimesh(V, F, process=False).vertex_normals
-    _, _, mask = rasterize_uv(V.astype(np.float64), F, st, n, tex.shape[0])
-    return tex, mask
+    return tex, _raster(asset_dir, tex.shape[0])[2]
+
 
 
 def prepare(asset_dir, input_image, out_json, prompt: str = "", k: int = 6, min_share: float = 0.01,
@@ -448,6 +462,13 @@ def apply_texel_classes(spec_json, out_dir=None) -> dict:
     spec = json.loads(Path(spec_json).read_text())
     asset = Path(spec["asset"]); out_dir = Path(out_dir or asset)
     res = apply(spec_json, out_dir)                      # region-based maps + de-lit base colour as the fallback
+    try:
+        sv = spec.get("seen_view")
+        if sv is None:
+            sv = best_view(asset / "mat" / "orbit", spec["image"])
+        res["lifted_texels"] = fix_invented_side(asset, np.load(asset / "mat" / "texel_class.npy"), spec["texel_classes"], sv)
+    except Exception as e:
+        res["lifted_texels"] = f"skipped: {e}"
     cls_tex = np.load(asset / "mat" / "texel_class.npy")
     names = spec["texel_classes"]
     R = np.asarray(Image.open(out_dir / "roughness.png"), np.float32)[::-1] / 255
@@ -462,6 +483,8 @@ def apply_texel_classes(spec_json, out_dir=None) -> dict:
     orm = np.stack([np.ones_like(R), R, M], -1)
     Image.fromarray((orm[::-1].clip(0, 1) * 255).astype(np.uint8)).save(out_dir / "orm.png")
     res["finish"] = finish_maps(asset, cls_tex, names)
+    res["glass_smoothed"] = smooth_glass(asset, cls_tex, names)
+    res["shading_smooth_iters"] = smooth_shading_normals(asset, cls_tex, names)
     return res
 
 
@@ -516,7 +539,10 @@ def export_parts(asset_dir, out_name: str = "asset_parts.usda", group: str = "pa
         used.add(k)
         fi = np.nonzero(lab == i)[0]
         vid, inv = np.unique(F[fi].ravel(), return_inverse=True)
-        mesh = UsdGeom.Mesh.Define(st_out, f"/Asset/{'Parts' if group == 'part' else 'MaterialGroups'}/{k}")
+        grp = f"/Asset/{'Parts' if group == 'part' else 'MaterialGroups'}"
+        UsdGeom.Scope.Define(st_out, grp)
+        UsdGeom.Xform.Define(st_out, f"{grp}/{k}")
+        mesh = UsdGeom.Mesh.Define(st_out, f"{grp}/{k}/Geom")
         mesh.CreatePointsAttr(Vt.Vec3fArray.FromNumpy(V[vid].astype(np.float32)))
         mesh.CreateFaceVertexCountsAttr(Vt.IntArray.FromNumpy(np.full(len(fi), 3, np.int32)))
         mesh.CreateFaceVertexIndicesAttr(Vt.IntArray.FromNumpy(inv.astype(np.int32)))
@@ -549,7 +575,10 @@ def export_parts(asset_dir, out_name: str = "asset_parts.usda", group: str = "pa
         mat.CreateSurfaceOutput().ConnectToSource(pbr.ConnectableAPI(), "surface")
         UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(mat)
         mesh.GetPrim().SetCustomDataByKey("splat2mesh:material", cls)
-        parts[k] = {"material": cls, "faces": int(len(fi))}
+        L = _lib(cls)
+        parts[k] = {"material": cls, "faces": int(len(fi)), "transmission": L.get("transmission", 0.0),
+                    "subsurface": L.get("subsurface", 0.0), "ior": L.get("ior"), "roughness": L.get("roughness"),
+                    "metallic": L.get("metallic", 0)}
     st_out.GetRootLayer().Save()
     (asset / ("parts.json" if group == "part" else "material_groups.json")).write_text(json.dumps(parts, indent=1))
     return parts
@@ -557,6 +586,115 @@ def export_parts(asset_dir, out_name: str = "asset_parts.usda", group: str = "pa
 
 def _lib(cls):
     return LIB.get(cls) or LIB.get(VLM_TO_LIB.get(cls, ""), {})
+
+
+def best_view(orbit_dir, image) -> int:
+    """Index of the orbit frame that looks most like the input picture (the side the generator really saw)."""
+    def crop(path, bg_dark):
+        a = np.asarray(Image.open(path).convert("RGB"), np.float32)
+        fg = a.max(-1) > 10 if bg_dark else a.min(-1) < 245
+        ys, xs = np.nonzero(fg)
+        a = a[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+        return np.asarray(Image.fromarray(a.astype(np.uint8)).resize((96, 96)), np.float32)
+    ref = crop(image, True)
+    frames = sorted((Path(orbit_dir) / "frames").glob("*.jpg"))
+    return int(np.argmax([-np.abs(crop(f, False) - ref).mean() for f in frames]))
+
+
+def fix_invented_side(asset_dir, cls_tex, names, seen_view: int, ratio: float = 0.65) -> int:
+    """Idol invents what the input picture did not show and often paints it darker (dark backs, black bases).
+    For each material class, texels seen in the input's own view set the reference; texels of the same class
+    that the view never saw and that are much darker than that reference get their luminance lifted to it
+    (chroma kept), so a bust is not black behind. Returns the number of texels changed."""
+    asset = Path(asset_dir)
+    base = np.asarray(Image.open(asset / "basecolor_delit.png").convert("RGB"), np.float32)[::-1] / 255
+    R = base.shape[0]
+    # "seen" = the texel's surface faces the input picture's camera (orbit frame seen_view: azimuth 2πi/16,
+    # elevation 15°). Geometric, so it is dense at any atlas size (pixel maps of a 768² view are not).
+    _, nrm, msk = _raster(asset, R)
+    n_views = len(list((asset / "mat" / "orbit" / "frames").glob("*.jpg"))) or 16
+    a, e = 2 * np.pi * seen_view / n_views, np.radians(15.0)
+    d = np.array([np.sin(a) * np.cos(e), np.sin(e), np.cos(a) * np.cos(e)])
+    seen = msk & ((nrm @ d) > 0.15)
+    lab = _srgb_to_lab(base)
+    changed = 0
+    for i in range(len(names)):
+        cls_mask = cls_tex == i
+        ref = cls_mask & seen
+        if ref.sum() < 200:
+            continue
+        Lref = np.median(lab[..., 0][ref])
+        bad = cls_mask & ~seen & (lab[..., 0] < ratio * Lref)
+        if bad.sum() == 0:
+            continue
+        gain = np.clip(Lref / np.maximum(lab[..., 0][bad], 1.0), 1.0, 4.0)
+        lin = np.where(base[bad] <= 0.04045, base[bad] / 12.92, ((base[bad] + 0.055) / 1.055) ** 2.4)
+        lin = np.clip(lin * (gain[:, None] ** 1.6), 0, 1)
+        base[bad] = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * lin ** (1 / 2.4) - 0.055)
+        changed += int(bad.sum())
+    Image.fromarray((base[::-1].clip(0, 1) * 255).astype(np.uint8)).save(asset / "basecolor_delit.png")
+    return changed
+
+
+def smooth_glass(asset_dir, cls_tex, names, min_share: float = 0.35, iterations: int = 40) -> bool:
+    """Glass shows every bump of the fused surface. When transparent classes cover most of the object, Taubin-
+    smooth the vertex positions (seam duplicates merged so the surface stays watertight); UVs untouched."""
+    from pxr import Usd, UsdGeom, Vt
+    import trimesh
+    asset = Path(asset_dir)
+    tex, mask = _texture_and_mask(asset)
+    glass = np.zeros(mask.shape, bool)
+    for i, n in enumerate(names):
+        L = _lib(n.split("|")[0])
+        if L.get("transmission", 0) > 0 or L.get("subsurface", 0) >= 0.5:      # glass, crystal, jade, wax
+            glass |= cls_tex == i
+    share = (glass & mask).sum() / max(mask.sum(), 1)
+    if share < min_share:
+        return False
+    st = Usd.Stage.Open(str(asset / "asset.usda"))
+    m = UsdGeom.Mesh(st.GetPrimAtPath("/Asset/Geom"))
+    V = np.asarray(m.GetPointsAttr().Get(), np.float64)
+    F = np.asarray(m.GetFaceVertexIndicesAttr().Get(), np.int64).reshape(-1, 3)
+    key = np.round(V / (np.ptp(V, 0).max() * 1e-6)).astype(np.int64)
+    _, uid, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
+    tm = trimesh.Trimesh(V[uid], inv.reshape(-1)[F], process=False)
+    trimesh.smoothing.filter_taubin(tm, lamb=0.5, nu=0.53, iterations=iterations)
+    Vn = np.asarray(tm.vertices)[inv.reshape(-1)]
+    m.GetPointsAttr().Set(Vt.Vec3fArray.FromNumpy(Vn.astype(np.float32)))
+    nrm = np.asarray(tm.vertex_normals)[inv.reshape(-1)]
+    m.GetNormalsAttr().Set(Vt.Vec3fArray.FromNumpy(nrm.astype(np.float32)))
+    st.GetRootLayer().Save()
+    return True
+
+
+def smooth_shading_normals(asset_dir, cls_tex, names) -> int:
+    """Reflections expose every small bump of the fused surface. Keep the positions (silhouette, detail) and write
+    vertex normals taken from a Taubin-smoothed copy of the mesh, so glossy porcelain, lacquer and polished metal
+    reflect like finished pieces. Stronger when the object is mostly glossy. Returns the iterations used."""
+    from pxr import Usd, UsdGeom, Vt
+    import trimesh
+    asset = Path(asset_dir)
+    _, mask = _texture_and_mask(asset)
+    gl = np.zeros(mask.shape, bool)
+    for i, n in enumerate(names):
+        if _lib(n.split("|")[0]).get("roughness", 0.5) < 0.3:
+            gl |= cls_tex == i
+    glossy = (gl & mask).sum() / max(mask.sum(), 1)
+    it = 40 if glossy > 0.5 else 20
+    st = Usd.Stage.Open(str(asset / "asset.usda"))
+    m = UsdGeom.Mesh(st.GetPrimAtPath("/Asset/Geom"))
+    V = np.asarray(m.GetPointsAttr().Get(), np.float64)
+    F = np.asarray(m.GetFaceVertexIndicesAttr().Get(), np.int64).reshape(-1, 3)
+    key = np.round(V / (np.ptp(V, 0).max() * 1e-6)).astype(np.int64)
+    _, uid, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
+    inv = inv.reshape(-1)
+    tm = trimesh.Trimesh(V[uid], inv[F], process=False)
+    trimesh.smoothing.filter_taubin(tm, lamb=0.5, nu=0.53, iterations=it)
+    nrm = np.asarray(tm.vertex_normals)[inv]
+    m.GetNormalsAttr().Set(Vt.Vec3fArray.FromNumpy(nrm.astype(np.float32)))
+    m.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
+    st.GetRootLayer().Save()
+    return it
 
 
 def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
@@ -569,6 +707,7 @@ def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
     lin = lambda c: np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
     srgb = lambda c: np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(np.maximum(c, 0), 1 / 2.4) - 0.055)
     T = np.zeros(mask.shape, np.float32); S = np.zeros(mask.shape, np.float32)
+    hp_cache = {}
     Rmap = np.asarray(Image.open(asset / "roughness.png"), np.float32)[::-1] / 255
     Mmap = np.asarray(Image.open(asset / "metallic.png"), np.float32)[::-1] / 255
     info = {}
@@ -578,18 +717,20 @@ def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
             continue
         if L.get("metallic", 0) >= 0.5 and L.get("f0"):
             lum0 = lin(base[sel]).mean(-1)
-            dark = lum0 < 0.08                                # black/dark ink or enamel on the metal (linear lum): not metal
+            labm = _srgb_to_lab(base[sel])
+            dark = (lum0 < 0.08) & (np.hypot(labm[:, 1], labm[:, 2]) < 10)   # black ink/enamel (colourless): not metal; tinted shadows stay metal
             if dark.any():
                 ys, xs = np.nonzero(sel)
                 Mmap[ys[dark], xs[dark]] = 0.0; Rmap[ys[dark], xs[dark]] = 0.3
                 sel = sel.copy(); sel[ys[dark], xs[dark]] = False
-            lum = lin(base[sel]).mean(-1)
-            # polished metals: the baked colour is frozen reflections → library colour only; matte metals keep a
-            # little of the texture's detail (hammering, engraving)
-            exp = 0.0 if L.get("roughness", 0.3) < 0.3 else metal_detail
-            detail = (lum / max(np.median(lum), 1e-4)) ** exp
+            # keep only the FINE luminance detail (hammering, engraving, grain): high-pass of log-luminance; the
+            # broad variation is frozen reflections/lighting and is discarded
+            if hp_cache.get("hp") is None:
+                lum_all = np.log(lin(base).mean(-1) + 1e-3)
+                hp_cache["hp"] = lum_all - ndi.gaussian_filter(lum_all, 24)
             f0 = np.array(L["f0"], np.float32)
-            detail = np.clip(detail, 0.6, 1.0 / f0.max())        # keep the hue: never push a channel past 1
+            detail = np.exp(0.9 * hp_cache["hp"][sel])
+            detail = np.clip(detail, 0.55, 1.0 / f0.max())
             base[sel] = srgb(f0[None] * detail[:, None])
         if L.get("transmission", 0) > 0:      # glass: what the splat shows is the background seen through it
             tint = np.median(lin(base[sel]), 0)
