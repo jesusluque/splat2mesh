@@ -28,27 +28,45 @@ ref = obj_crop(image, bg_dark=True)                                 # Idol input
 frames = sorted((orbit / "frames").glob("*.jpg"))
 score = [-np.abs(obj_crop(f, bg_dark=False) - ref).mean() for f in frames]
 ann = frames[int(np.argmax(score))].name
+ann2 = frames[(int(np.argmax(score)) + len(frames) // 2) % len(frames)].name   # opposite side, tracked too
 print("annotation frame scores (best 3):", sorted(zip(score, [f.name for f in frames]))[-3:])
 items = [(c, t.replace("'", "").replace('"', '').strip()) for c, t in parse_description(desc)]
+# a transparent material is also searched by its own name ("the glass"): the description may not list every pane
+# (a car's rear window), and the glass-openings step (splat2mesh/openings.py) uses the union of all glass masks
+from splat2mesh.materials import _lib as _libm
+for c in sorted({c for c, _ in items if _libm(c).get("transmission", 0) > 0}):
+    if f"the {c}" not in [t for _, t in items]:
+        items.append((c, f"the {c}"))
 tag = asset.resolve().as_posix().replace("/", "_")[-60:]
 if LINUX:
     win = f"splat2mesh_eneas/jobs/{tag}"; wsl = f"$HOME/{win}"
 else:
     win = f"C:/splat2mesh/eneas_jobs/{tag}"; wsl = "/mnt/c/" + win[3:]
 reuse = "--reuse-masks" in sys.argv and (asset / "mat" / "masks.npz").exists()
-if not reuse:
+run_items = items
+if reuse:                     # only the phrases the saved masks do not have yet
+    have = set(np.load(asset / "mat" / "masks.npz").files)
+    run_items = [(c, t) for c, t in items if t not in have]
+    if run_items:
+        print("ENEAS for new phrases only:", [t for _, t in run_items])
+if not reuse or run_items:
   if LINUX:
     subprocess.run(["ssh", HOST, f"rm -rf ~/{win}; mkdir -p ~/{win}/frames"], check=False)
   else:
     subprocess.run(["ssh", HOST, f'rmdir /s /q "{win}" 2>nul & mkdir "{win}\\frames"'], check=False)
   subprocess.run(["scp", "-q", *map(str, frames), f"{HOST}:{win}/frames/"], check=True)
   subprocess.run(["scp", "-q", str(ROOT / "scripts/eneas_seq.py"), f"{HOST}:{win}/"], check=True)
-  q = " ".join("'" + t.replace("'", "") + "'" for _, t in items)
-  inner = f"~/.local/bin/uv run python {wsl}/eneas_seq.py {wsl}/frames {wsl}/masks.npz {ann} {q}"
+  q = " ".join("'" + t.replace("'", "") + "'" for _, t in run_items)
+  inner = f"~/.local/bin/uv run python {wsl}/eneas_seq.py {wsl}/frames {wsl}/masks.npz {ann},{ann2} {q}"
   cmd = (f"cd ~/splat2mesh_eneas/eneas && {inner}" if LINUX
          else f'wsl -d Ubuntu-24.04 -- bash -lc "cd ~/splat2mesh/eneas && {inner}"')
   print(subprocess.run(["ssh", HOST, cmd], capture_output=True, text=True).stdout.replace("\x00", "")[-1500:])
-  subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(asset / "mat" / "masks.npz")], check=True)
+  if reuse:                 # merge the new phrases into the saved masks
+      subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(asset / "mat" / "masks_new.npz")], check=True)
+      merged = {**dict(np.load(asset / "mat" / "masks.npz")), **dict(np.load(asset / "mat" / "masks_new.npz"))}
+      np.savez_compressed(asset / "mat" / "masks.npz", **merged); (asset / "mat" / "masks_new.npz").unlink()
+  else:
+      subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(asset / "mat" / "masks.npz")], check=True)
 z = np.load(asset / "mat" / "masks.npz")
 def _fit(m, n):            # ENEAS may return fewer frames than sent: pad with empty views
     if m.shape[0] >= n:

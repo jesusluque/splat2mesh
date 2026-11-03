@@ -25,6 +25,16 @@ def _srgb_to_lab(rgb):
     return np.stack([116 * f[..., 1] - 16, 500 * (f[..., 0] - f[..., 1]), 200 * (f[..., 1] - f[..., 2])], -1)
 
 
+def _lab_to_srgb(lab):
+    """Inverse of _srgb_to_lab (same D65 white, same matrix)."""
+    fy = (lab[..., 0] + 16) / 116; fx = fy + lab[..., 1] / 500; fz = fy - lab[..., 2] / 200
+    f = np.stack([fx, fy, fz], -1)
+    xyz = np.where(f > 0.206893, f ** 3, (f - 16 / 116) / 7.787) * np.array([0.9505, 1.0, 1.089])
+    M = np.array([[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]])
+    c = np.clip(xyz @ np.linalg.inv(M).T, 0, 1)
+    return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1 / 2.4) - 0.055)
+
+
 def _kmeans(X, k, iters=30, seed=0):
     rng = np.random.default_rng(seed)
     C = X[rng.choice(len(X), 1)]
@@ -37,6 +47,14 @@ def _kmeans(X, k, iters=30, seed=0):
     return C, lab
 
 
+# finish-pass constants
+GLASS_PATTERN_SPREAD = 12.0   # Lab a*b* median distance; above it the glass is multi-coloured (stained glass)
+INK_MAX_WIDTH = 4             # texels (half-width) of a dark stroke still read as ink rather than a reflection
+METAL_DETAIL_SIGMA = 8.0      # texels: metal albedo keeps luminance detail finer than this (hammering, engraving)
+METAL_DETAIL_MIN = 0.75       # ...and may darken by at most this factor (deeper darks are reflections)
+GLASS_SMOOTH_ITERS = 120      # Taubin iterations on glass/crystal/jade/wax vertices
+GLASS_WALL_MIN = 0.08         # glass thicker than this × object size is really a hollow wall (bulb, bowl, bottle)
+GLOSS_UNIFORM_SPREAD = 10.0   # Lab a*b* spread below which a glossy dielectric piece is one colour (paint, lacquer)
 _RASTER = {}
 
 
@@ -159,6 +177,8 @@ def _usd_add_maps(usd_path: Path, maps_dir: Path):
             pbr = UsdShade.Shader(prim)
             mat_path = prim.GetPath().GetParentPath()
             reader = UsdShade.Shader(stage.GetPrimAtPath(mat_path.AppendChild("stReader")))
+            if not stage.GetPrimAtPath(mat_path.AppendChild("BaseColor")) or "M_interior" in str(mat_path):
+                continue                                  # glass panes / interior: own materials, not the baked maps
             base = UsdShade.Shader(stage.GetPrimAtPath(mat_path.AppendChild("BaseColor")))
             base.GetInput("file").Set(rel(maps_dir / "basecolor_delit.png"))
             for name, inp in (("Roughness", "roughness"), ("Metallic", "metallic")):
@@ -299,7 +319,7 @@ def render_orbit(asset_dir, out_dir, n: int = 16, elevation: float = 15.0, size:
     return out_dir
 
 
-def refine_by_regions(tex, mask, votes, spec, classes, min_share: float = 0.25):
+def refine_by_regions(tex, mask, votes, spec, classes, min_share: float = 0.25, pos=None):
     """Material borders follow colour borders. In each colour region only the material classes holding at least
     min_share of that region's votes are allowed; each texel takes the allowed part with most votes at that
     texel (or the region's majority part when unseen). White texels cannot become gold because a phrase mask
@@ -326,6 +346,15 @@ def refine_by_regions(tex, mask, votes, spec, classes, min_share: float = 0.25):
         lab_t = vv.argmax(0)
         unseen = v.sum(0) == 0
         lab_t[unseen] = int(np.argmax(np.where(allowed, per_part, -1)))
+        if pos is not None and unseen.any() and allowed.sum() > 1:
+            # an unvoted texel takes the allowed part of the nearest voted texel in 3D, not the region's majority:
+            # dark reflections on the back of a silver pot are next to silver, far from the wooden handle
+            from scipy.spatial import cKDTree
+            P = pos[sel]; known = ~unseen & allowed[lab_t]
+            if known.sum() > 50:
+                kidx = np.nonzero(known)[0][::max(1, known.sum() // 400_000)]
+                _, nn = cKDTree(P[kidx]).query(P[unseen], k=1, workers=-1)
+                lab_t[unseen] = lab_t[kidx[nn]]
         out[sel] = lab_t
     return out
 
@@ -375,7 +404,8 @@ def from_view_masks(spec_json, orbit_dir, masks: dict) -> dict:
         np.add.at(votes, (label[ok], tm[ok]), 1.0)
     seen = votes.sum(0) > 0
     cls_tex = np.where(seen, votes.argmax(0), -1).reshape(R, R)
-    cls_tex = refine_by_regions(tex, mask, votes.reshape(len(names), R, R), spec, [n.split("|")[0] for n in names])
+    cls_tex = refine_by_regions(tex, mask, votes.reshape(len(names), R, R), spec, [n.split("|")[0] for n in names],
+                                pos=_raster(Path(spec["asset"]), R)[0])
     # fill unseen texels: majority over the texel's colour region
     C = np.array([r["lab"] for r in spec["regions"]])
     reg = ((_srgb_to_lab(tex)[..., None, :] - C[None, None]) ** 2).sum(-1).argmin(-1)
@@ -386,6 +416,12 @@ def from_view_masks(spec_json, orbit_dir, masks: dict) -> dict:
             maj = np.bincount(known, minlength=len(names)).argmax()
             fill = sel & (cls_tex < 0)
             cls_tex[fill] = maj
+    # colour priors trust the colour, and the colour is only real where the input picture saw the surface; on the
+    # side Idol invented (a rear tyre painted grey, a back window painted white) the ENEAS votes decide alone
+    sv = spec.get("seen_view")
+    if sv is None:
+        sv = best_view(Path(spec["asset"]) / "mat" / "orbit", spec["image"])
+    seen_in = _seen_mask(Path(spec["asset"]), R, sv)
     # thin metal parts ENEAS cannot find (kintsugi lines, gilt rims): a named metal with no texels claims the
     # colour regions whose hue matches its F0 colour (and that are saturated enough to be coloured metal)
     for i, n in enumerate(names):
@@ -397,7 +433,7 @@ def from_view_masks(spec_json, orbit_dir, masks: dict) -> dict:
         if np.ptp(L["f0"]) < 0.08:                       # achromatic metal (chrome, silver, steel, aluminium)
             for j, r in enumerate(spec["regions"]):
                 if np.hypot(r["lab"][1], r["lab"][2]) < 10 and r["lab"][0] > 55:
-                    cls_tex[mask & (reg == j)] = i; print(f"colour prior: region {j} → {cls} (grey metal)")
+                    cls_tex[mask & (reg == j) & seen_in] = i; print(f"colour prior: region {j} → {cls} (grey metal)")
             continue
         f0lab = _srgb_to_lab(np.where(np.array(L["f0"]) <= 0.0031308, np.array(L["f0"]) * 12.92,
                                       1.055 * np.power(np.array(L["f0"]), 1 / 2.4) - 0.055)[None])[0]
@@ -406,7 +442,7 @@ def from_view_masks(spec_json, orbit_dir, masks: dict) -> dict:
             a, b = r["lab"][1], r["lab"][2]
             chroma = np.hypot(a, b); h = np.degrees(np.arctan2(b, a))
             if chroma > 25 and abs((h - h0 + 180) % 360 - 180) < 20 and np.hypot(f0lab[1], f0lab[2]) > 15:
-                sel = mask & (reg == j)
+                sel = mask & (reg == j) & seen_in
                 cls_tex[sel] = i
                 print(f"colour prior: region {j} → {cls}")
     # unfound rubber / black parts: the near-black regions
@@ -415,7 +451,7 @@ def from_view_masks(spec_json, orbit_dir, masks: dict) -> dict:
         if cls in ("rubber", "matte plastic") and not (cls_tex == i).any():
             for j, r in enumerate(spec["regions"]):
                 if r["lab"][0] < 20:
-                    cls_tex[mask & (reg == j)] = i; print(f"colour prior: region {j} → {cls} (dark)")
+                    cls_tex[mask & (reg == j) & seen_in] = i; print(f"colour prior: region {j} → {cls} (dark)")
     # a secondary transparent part may not swallow the object (watch "crystal" over the dial): above 25 % its
     # texels go back to the best-voted opaque part
     first_cls = names[0].split("|")[0] if names else None
@@ -471,6 +507,22 @@ def apply_texel_classes(spec_json, out_dir=None) -> dict:
         res["lifted_texels"] = f"skipped: {e}"
     cls_tex = np.load(asset / "mat" / "texel_class.npy")
     names = spec["texel_classes"]
+    try:                                   # described glass the splat left as an opening (car windows)
+        from .openings import glass_openings
+        tot = max(int((cls_tex >= 0).sum()), 1)
+        share = {n: float((cls_tex == i).sum()) / tot for i, n in enumerate(names)}
+        res["glass_openings"] = glass_openings(asset, names, share)
+        gi = [i for i, n in enumerate(names) if _lib(n.split("|")[0]).get("transmission", 0) > 0]
+        if gi and (asset / "glass_openings.npz").exists():
+            from .openings import surface_glass_texels
+            sg = surface_glass_texels(asset, cls_tex.shape[0]) & (cls_tex >= 0)
+            if sg.any():
+                cls_tex = cls_tex.copy(); cls_tex[sg] = gi[0]
+                res["glass_openings"]["surface_glass_texels"] = int(sg.sum())
+        gi = [i for i, n in enumerate(names) if _lib(n.split("|")[0]).get("transmission", 0) > 0]
+
+    except Exception as e:
+        res["glass_openings"] = f"skipped: {e}"
     R = np.asarray(Image.open(out_dir / "roughness.png"), np.float32)[::-1] / 255
     M = np.asarray(Image.open(out_dir / "metallic.png"), np.float32)[::-1] / 255
     for i, n in enumerate(names):
@@ -485,7 +537,81 @@ def apply_texel_classes(spec_json, out_dir=None) -> dict:
     res["finish"] = finish_maps(asset, cls_tex, names)
     res["glass_smoothed"] = smooth_glass(asset, cls_tex, names)
     res["shading_smooth_iters"] = smooth_shading_normals(asset, cls_tex, names)
+    res["glass_wall_faces"] = glass_walls(asset, cls_tex, names)
     return res
+
+
+def glass_walls(asset_dir, cls_tex, names, min_thickness: float = GLASS_WALL_MIN) -> int:
+    """Direct mode builds solids, but a glass bulb, bowl or bottle is a thin wall around air: refracting through
+    the whole filled volume shows its inner lumps as grain. Glass faces where the solid is thick (inward ray to
+    the opposite side > min_thickness × object size) are bound to a thin-walled copy of the material through a
+    GeomSubset; thin glass (a stem, a foot, a rod) stays solid and refracts. Returns the number of wall faces."""
+    from pxr import Sdf, Usd, UsdGeom, UsdShade, Vt
+    import open3d as o3d
+    asset = Path(asset_dir)
+    _, mask = _texture_and_mask(asset)
+    R = mask.shape[0]
+    glass_cls = [i for i, n in enumerate(names) if _lib(n.split("|")[0]).get("transmission", 0) > 0]
+    st = Usd.Stage.Open(str(asset / "asset.usda"))
+    geom = st.GetPrimAtPath("/Asset/Geom"); m = UsdGeom.Mesh(geom)
+    for c in geom.GetChildren():                          # idempotent: drop an earlier split
+        if c.GetName() == "glass_walls":
+            st.RemovePrim(c.GetPath())
+    mat_prim = UsdShade.MaterialBindingAPI(geom).ComputeBoundMaterial()[0].GetPrim()   # the object's own material
+    thin_path = Sdf.Path(str(mat_prim.GetPath()) + "_thin")
+    if st.GetPrimAtPath(thin_path):
+        st.RemovePrim(thin_path)
+    n_wall = 0
+    if glass_cls:
+        V = np.asarray(m.GetPointsAttr().Get(), np.float32)
+        F = np.asarray(m.GetFaceVertexIndicesAttr().Get(), np.int64).reshape(-1, 3)
+        uv = np.asarray(UsdGeom.PrimvarsAPI(m).GetPrimvar("st").Get(), np.float64)
+        c = uv[F].mean(1)
+        fcls = cls_tex[np.clip((c[:, 1] * R).astype(int), 0, R - 1), np.clip((c[:, 0] * R).astype(int), 0, R - 1)]
+        fg = np.nonzero(np.isin(fcls, glass_cls))[0]
+        if len(fg):
+            tri = V[F[fg]]
+            cen = tri.mean(1)
+            nrm = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+            nrm /= np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-12)
+            scene = o3d.t.geometry.RaycastingScene(); scene.add_triangles(V, F.astype(np.uint32))
+            size = float(np.linalg.norm(V.max(0) - V.min(0)))
+            eps = 1e-4 * size
+            def cast(o, d, off=eps):
+                rays = np.concatenate([o + d * off, d], 1).astype(np.float32)
+                return scene.cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy()
+            d = -nrm
+            t_in = cast(cen, d)                                 # outward normals: the opposite side is inward
+            if np.isinf(t_in).mean() > 0.5:                     # inward-facing winding
+                d = nrm; t_in = cast(cen, d)
+            hit = np.isfinite(t_in)
+            t_next = np.full(len(cen), np.inf, np.float32)      # beyond the first exit: air, then another wall?
+            t_next[hit] = cast(cen[hit] + d[hit] * t_in[hit, None], d[hit], off=2e-3 * size)
+            filled = hit & (t_in > min_thickness * size)        # a filled solid (bulb made solid by direct mode)
+            shell = hit & ~filled & np.isfinite(t_next) & (t_next > min_thickness * size)   # thin wall, air behind
+            score = (filled | shell).astype(np.float64)
+            # coherent regions, not a patchwork: average the decision over neighbouring faces (via vertices)
+            Fg = F[fg]; nv = len(V)
+            for _ in range(8):
+                acc = np.zeros(nv); cnt = np.zeros(nv)
+                np.add.at(acc, Fg.ravel(), np.repeat(score, 3)); np.add.at(cnt, Fg.ravel(), 1)
+                score = (acc / np.maximum(cnt, 1))[Fg].mean(1)
+            thick = score > 0.5
+            wall = fg[thick]
+            n_wall = int(len(wall))
+            if n_wall:
+                Sdf.CopySpec(st.GetRootLayer(), mat_prim.GetPath(), st.GetRootLayer(), thin_path)
+                for p in Usd.PrimRange(st.GetPrimAtPath(thin_path)):     # CopySpec already remaps internal paths
+                    if p.GetName() == "StandardSurface":
+                        UsdShade.Shader(p).CreateInput("thin_walled", Sdf.ValueTypeNames.Bool).Set(True)
+                sub = UsdGeom.Subset.Define(st, geom.GetPath().AppendChild("glass_walls"))
+                sub.CreateElementTypeAttr(UsdGeom.Tokens.face)
+                sub.CreateIndicesAttr(Vt.IntArray.FromNumpy(wall.astype(np.int32)))
+                sub.CreateFamilyNameAttr(UsdShade.Tokens.materialBind)
+                UsdShade.MaterialBindingAPI.Apply(sub.GetPrim()).Bind(UsdShade.Material(st.GetPrimAtPath(thin_path)))
+                UsdGeom.Subset.SetFamilyType(m, UsdShade.Tokens.materialBind, UsdGeom.Tokens.nonOverlapping)
+    st.GetRootLayer().Save()
+    return n_wall
 
 
 def export_parts(asset_dir, out_name: str = "asset_parts.usda", group: str = "part") -> dict:
@@ -524,7 +650,7 @@ def export_parts(asset_dir, out_name: str = "asset_parts.usda", group: str = "pa
     # files referenced by the single-material version
     files = {}
     for prim in src.Traverse():
-        if prim.GetTypeName() == "Shader" and "M_interior" not in str(prim.GetPath()):
+        if prim.GetTypeName() == "Shader" and "M_interior" not in str(prim.GetPath()) and "M_glass_openings" not in str(prim.GetPath()):
             f = UsdShade.Shader(prim).GetInput("file")
             if f and f.Get():
                 files[prim.GetName()] = f.Get().path
@@ -581,6 +707,15 @@ def export_parts(asset_dir, out_name: str = "asset_parts.usda", group: str = "pa
                     "patterned": bool(L.get("patterned", False)), "tint": L.get("tint"),
                     "subsurface": L.get("subsurface", 0.0), "ior": L.get("ior"), "roughness": L.get("roughness"),
                     "metallic": L.get("metallic", 0)}
+    if (asset / "glass_openings.npz").exists():   # glass sheets over openings (see openings.py)
+        from .openings import define_glass
+        grp = f"/Asset/{'Parts' if group == 'part' else 'MaterialGroups'}"
+        UsdGeom.Xform.Define(st_out, f"{grp}/glass_panes")
+        gm = define_glass(st_out, f"{grp}/glass_panes/Geom", asset, "/Asset/Materials/M_glass_panes")
+        parts["glass_panes"] = {"material": "glass", "faces": len(gm.GetFaceVertexCountsAttr().Get()), "transmission": 1.0,
+                                "patterned": False, "subsurface": 0.0, "ior": 1.5,
+                                "tint": [float(x) for x in np.load(asset / "glass_openings.npz").get("tint", [0.95, 0.97, 1.0])],
+                                "roughness": 0.03, "metallic": 0}
     if (asset / "interior.npz").exists():      # inner structure of transparent parts (see interior.py)
         from .interior import define_interior
         grp = f"/Asset/{'Parts' if group == 'part' else 'MaterialGroups'}"
@@ -611,6 +746,16 @@ def best_view(orbit_dir, image) -> int:
     return int(np.argmax([-np.abs(crop(f, False) - ref).mean() for f in frames]))
 
 
+def _seen_mask(asset: Path, R: int, seen_view: int) -> np.ndarray:
+    """Texels whose surface faces the input picture's camera (orbit frame seen_view: azimuth 2πi/16, elevation
+    15°). Geometric, so it is dense at any atlas size (pixel maps of a 768² view are not)."""
+    _, nrm, msk = _raster(asset, R)
+    n_views = len(list((asset / "mat" / "orbit" / "frames").glob("*.jpg"))) or 16
+    a, e = 2 * np.pi * seen_view / n_views, np.radians(15.0)
+    d = np.array([np.sin(a) * np.cos(e), np.sin(e), np.cos(a) * np.cos(e)])
+    return msk & ((nrm @ d) > 0.15)
+
+
 def fix_invented_side(asset_dir, cls_tex, names, seen_view: int, ratio: float = 0.65) -> int:
     """Idol invents what the input picture did not show and often paints it darker (dark backs, black bases).
     For each material class, texels seen in the input's own view set the reference; texels of the same class
@@ -621,11 +766,7 @@ def fix_invented_side(asset_dir, cls_tex, names, seen_view: int, ratio: float = 
     R = base.shape[0]
     # "seen" = the texel's surface faces the input picture's camera (orbit frame seen_view: azimuth 2πi/16,
     # elevation 15°). Geometric, so it is dense at any atlas size (pixel maps of a 768² view are not).
-    _, nrm, msk = _raster(asset, R)
-    n_views = len(list((asset / "mat" / "orbit" / "frames").glob("*.jpg"))) or 16
-    a, e = 2 * np.pi * seen_view / n_views, np.radians(15.0)
-    d = np.array([np.sin(a) * np.cos(e), np.sin(e), np.cos(a) * np.cos(e)])
-    seen = msk & ((nrm @ d) > 0.15)
+    seen = _seen_mask(asset, R, seen_view)
     lab = _srgb_to_lab(base)
     changed = 0
     for i in range(len(names)):
@@ -635,9 +776,13 @@ def fix_invented_side(asset_dir, cls_tex, names, seen_view: int, ratio: float = 
             continue
         Lref = np.median(lab[..., 0][ref])
         bad = cls_mask & ~seen & (lab[..., 0] < ratio * Lref)
+        # a one-colour piece (rubber, paint) invented much LIGHTER behind is brought down the same way
+        abr = lab[..., 1:][ref]
+        if np.median(np.hypot(*(abr - np.median(abr, 0)).T)) < GLOSS_UNIFORM_SPREAD and Lref < 70:
+            bad |= cls_mask & ~seen & (lab[..., 0] > Lref / ratio)
         if bad.sum() == 0:
             continue
-        gain = np.clip(Lref / np.maximum(lab[..., 0][bad], 1.0), 1.0, 4.0)
+        gain = np.clip(Lref / np.maximum(lab[..., 0][bad], 1.0), 0.15, 4.0)
         lin = np.where(base[bad] <= 0.04045, base[bad] / 12.92, ((base[bad] + 0.055) / 1.055) ** 2.4)
         lin = np.clip(lin * (gain[:, None] ** 1.6), 0, 1)
         base[bad] = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * lin ** (1 / 2.4) - 0.055)
@@ -646,32 +791,66 @@ def fix_invented_side(asset_dir, cls_tex, names, seen_view: int, ratio: float = 
     return changed
 
 
-def smooth_glass(asset_dir, cls_tex, names, min_share: float = 0.35, iterations: int = 40) -> bool:
-    """Glass shows every bump of the fused surface. When transparent classes cover most of the object, Taubin-
-    smooth the vertex positions (seam duplicates merged so the surface stays watertight); UVs untouched."""
+def _orig_points(asset: Path, m):
+    """Vertex positions as built (before any finish smoothing), saved once so re-applying stays idempotent."""
+    from pxr import Vt
+    f = asset / "mat" / "points_orig.npy"
+    V = np.asarray(m.GetPointsAttr().Get(), np.float64)
+    if f.exists():
+        V0 = np.load(f)
+        if V0.shape == V.shape:
+            return V0
+    ply = asset / "mesh.ply"                     # written by the geometry stage, before any finish pass
+    if ply.exists():
+        import trimesh
+        tm = trimesh.load(ply, process=False)
+        F = np.asarray(m.GetFaceVertexIndicesAttr().Get(), np.int64).reshape(-1, 3)
+        if np.asarray(tm.vertices).shape == V.shape and np.array_equal(np.asarray(tm.faces), F):
+            V = np.asarray(tm.vertices, np.float64)
+    f.parent.mkdir(exist_ok=True); np.save(f, V)
+    return V
+
+
+def smooth_glass(asset_dir, cls_tex, names, iterations: int = GLASS_SMOOTH_ITERS, min_share: float = 0.02) -> bool:
+    """Glass, crystal, jade and wax show every bump of the fused surface (grain on a wine glass). Their vertices are
+    Taubin-smoothed — only theirs, with a soft falloff at the border so metal or wood parts keep their shape —
+    starting from the original positions every time (idempotent). Seam duplicates merged; UVs untouched."""
     from pxr import Usd, UsdGeom, Vt
+    import scipy.sparse as sp
     import trimesh
     asset = Path(asset_dir)
     tex, mask = _texture_and_mask(asset)
-    glass = np.zeros(mask.shape, bool)
-    for i, n in enumerate(names):
-        L = _lib(n.split("|")[0])
-        if L.get("transmission", 0) > 0 or L.get("subsurface", 0) >= 0.5:      # glass, crystal, jade, wax
-            glass |= cls_tex == i
-    share = (glass & mask).sum() / max(mask.sum(), 1)
-    if share < min_share:
-        return False
+    R = mask.shape[0]
+    glass_cls = [i for i, n in enumerate(names)
+                 if _lib(n.split("|")[0]).get("transmission", 0) > 0 or _lib(n.split("|")[0]).get("subsurface", 0) >= 0.5]
     st = Usd.Stage.Open(str(asset / "asset.usda"))
     m = UsdGeom.Mesh(st.GetPrimAtPath("/Asset/Geom"))
-    V = np.asarray(m.GetPointsAttr().Get(), np.float64)
+    V = _orig_points(asset, m)
+    if not glass_cls:
+        return False
     F = np.asarray(m.GetFaceVertexIndicesAttr().Get(), np.int64).reshape(-1, 3)
+    uv = np.asarray(UsdGeom.PrimvarsAPI(m).GetPrimvar("st").Get(), np.float64)
+    c = uv[F].mean(1)
+    fcls = cls_tex[np.clip((c[:, 1] * R).astype(int), 0, R - 1), np.clip((c[:, 0] * R).astype(int), 0, R - 1)]
+    fglass = np.isin(fcls, glass_cls)
+    if fglass.mean() < min_share:
+        return False
     key = np.round(V / (np.ptp(V, 0).max() * 1e-6)).astype(np.int64)
     _, uid, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
-    tm = trimesh.Trimesh(V[uid], inv.reshape(-1)[F], process=False)
-    trimesh.smoothing.filter_taubin(tm, lamb=0.5, nu=0.53, iterations=iterations)
-    Vn = np.asarray(tm.vertices)[inv.reshape(-1)]
+    inv = inv.reshape(-1); Fu = inv[F]; n = len(uid)
+    w = np.zeros(n); np.add.at(w, Fu[fglass].ravel(), 1.0); cnt = np.zeros(n); np.add.at(cnt, Fu.ravel(), 1.0)
+    w = (w / np.maximum(cnt, 1))                      # share of glass faces around each vertex: 1 inside, 0 outside
+    e = np.concatenate([Fu[:, [0, 1]], Fu[:, [1, 2]], Fu[:, [2, 0]]])
+    A = sp.coo_matrix((np.ones(len(e) * 2), (np.r_[e[:, 0], e[:, 1]], np.r_[e[:, 1], e[:, 0]])), shape=(n, n)).tocsr()
+    A.data[:] = 1.0
+    D = np.asarray(A.sum(1)).ravel()
+    P = V[uid].copy()
+    for _ in range(iterations):                       # Taubin λ|μ, weighted per vertex
+        for f in (0.5, -0.53):
+            P += (f * w)[:, None] * ((A @ P) / np.maximum(D, 1)[:, None] - P)
+    Vn = P[inv]
     m.GetPointsAttr().Set(Vt.Vec3fArray.FromNumpy(Vn.astype(np.float32)))
-    nrm = np.asarray(tm.vertex_normals)[inv.reshape(-1)]
+    nrm = np.asarray(trimesh.Trimesh(P, Fu, process=False).vertex_normals)[inv]
     m.GetNormalsAttr().Set(Vt.Vec3fArray.FromNumpy(nrm.astype(np.float32)))
     st.GetRootLayer().Save()
     return True
@@ -707,7 +886,6 @@ def smooth_shading_normals(asset_dir, cls_tex, names) -> int:
     return it
 
 
-GLASS_PATTERN_SPREAD = 12.0   # Lab a*b* median distance; above it the glass is multi-coloured (stained glass)
 
 
 def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
@@ -734,17 +912,40 @@ def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
             dark = (lum0 < 0.08) & (np.hypot(labm[:, 1], labm[:, 2]) < 10)   # black ink/enamel (colourless): not metal; tinted shadows stay metal
             if dark.any():
                 ys, xs = np.nonzero(sel)
+                # ink and engraving are thin strokes; a wide dark patch on a metal is a frozen reflection of a dark
+                # surrounding (chrome toaster, silver teapot): it stays metal, only thin strokes become non-metal
+                dimg = np.zeros(sel.shape, bool); dimg[ys[dark], xs[dark]] = True
+                blob = ndi.binary_dilation(ndi.binary_opening(dimg, iterations=INK_MAX_WIDTH), iterations=2)
+                dark &= ~blob[ys, xs]
                 Mmap[ys[dark], xs[dark]] = 0.0; Rmap[ys[dark], xs[dark]] = 0.3
                 sel = sel.copy(); sel[ys[dark], xs[dark]] = False
             # keep only the FINE luminance detail (hammering, engraving, grain): high-pass of log-luminance; the
             # broad variation is frozen reflections/lighting and is discarded
             if hp_cache.get("hp") is None:
                 lum_all = np.log(lin(base).mean(-1) + 1e-3)
-                hp_cache["hp"] = lum_all - ndi.gaussian_filter(lum_all, 24)
+                hp_cache["hp"] = lum_all - ndi.gaussian_filter(lum_all, METAL_DETAIL_SIGMA)
             f0 = np.array(L["f0"], np.float32)
             detail = np.exp(0.9 * hp_cache["hp"][sel])
-            detail = np.clip(detail, 0.55, 1.0 / f0.max())
+            detail = np.clip(detail, METAL_DETAIL_MIN, 1.0 / f0.max())
             base[sel] = srgb(f0[None] * detail[:, None])
+        if (L.get("metallic", 0) < 0.5 and L.get("transmission", 0) <= 0 and L.get("roughness", 0.5) <= 0.4
+                and sel.sum() > 2000):
+            # glossy single-colour dielectric (paint, lacquer, plastic): a frozen reflection mixes the colour with
+            # white — paler and brighter than the piece's own colour. Uniform pieces only (patterned porcelain
+            # keeps its patterns): those texels go back to the median colour, keeping some fine detail
+            lab_s = _srgb_to_lab(base[sel])
+            ab0 = np.median(lab_s[:, 1:], 0); L0 = np.median(lab_s[:, 0]); c0 = float(np.hypot(*ab0))
+            spread = float(np.median(np.hypot(*(lab_s[:, 1:] - ab0).T)))
+            if c0 > 15 and spread < GLOSS_UNIFORM_SPREAD:
+                c = np.hypot(lab_s[:, 1], lab_s[:, 2])
+                hl = (c < 0.8 * c0) & (lab_s[:, 0] > L0)
+                if hl.any():
+                    fix = lab_s[hl].copy()
+                    fix[:, 0] = L0 + 0.3 * (fix[:, 0] - L0)
+                    fix[:, 1:] = ab0[None]
+                    ys, xs = np.nonzero(sel)
+                    base[ys[hl], xs[hl]] = _lab_to_srgb(fix)
+                    print(f"gloss {cls}: {int(hl.sum())} pale-highlight texels back to the piece colour")
         trans = L.get("transmission", 0.0); patterned = False; tint = None
         if trans > 0:      # glass: what the splat shows is mostly the background seen through it
             ab = _srgb_to_lab(base[sel])[:, 1:]
@@ -753,6 +954,8 @@ def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
             print(f"glass {cls}: colour spread {spread:.1f} → {'patterned (colour kept)' if patterned else 'uniform tint'}")
             if patterned:
                 trans = trans * 0.5                       # coloured glass lets less light through, shows its colours
+            elif (asset / "glass_openings.npz").exists() and "tint" in np.load(asset / "glass_openings.npz").files:
+                tint = np.load(asset / "glass_openings.npz")["tint"].astype(np.float64)   # same glass as the panes
             else:
                 tint = np.median(lin(base[sel]), 0)
                 tint = tint / max(tint.max(), 1e-4) * 0.95        # keep the hue, drop the frozen brightness
@@ -810,6 +1013,7 @@ def _usd_add_mtlx(usd_path: Path, has_t: bool, has_s: bool, ior: float = 1.5, th
     ss.CreateInput("specular_IOR", Sdf.ValueTypeNames.Float).Set(ior)
     if has_t:
         ss.CreateInput("transmission", Sdf.ValueTypeNames.Float).ConnectToSource(img("transmission", "./transmission.png").ConnectableAPI(), "out")
+        ss.CreateInput("transmission_color", Sdf.ValueTypeNames.Color3f).ConnectToSource(bc.ConnectableAPI(), "out")   # glass tint
         ss.CreateInput("thin_walled", Sdf.ValueTypeNames.Bool).Set(bool(thin))
     if has_s:
         ss.CreateInput("subsurface", Sdf.ValueTypeNames.Float).ConnectToSource(img("subsurface", "./subsurface.png").ConnectableAPI(), "out")
