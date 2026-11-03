@@ -405,18 +405,26 @@ def from_view_masks(spec_json, orbit_dir, masks: dict) -> dict:
     # a secondary transparent part may not swallow the object (watch "crystal" over the dial): above 25 % its
     # texels go back to the best-voted opaque part
     first_cls = names[0].split("|")[0] if names else None
+    labT = _srgb_to_lab(tex)
     for i, n in enumerate(names):
         cls = n.split("|")[0]
         if _lib(cls).get("transmission", 0) <= 0 or cls == first_cls:
             continue
         sel = (cls_tex == i) & mask
-        if sel.sum() > 0.25 * mask.sum():
-            opaque = [k for k, m in enumerate(names) if _lib(m.split("|")[0]).get("transmission", 0) <= 0]
-            if opaque:
-                v = votes[opaque][:, sel.reshape(-1)] if votes.ndim == 2 else None
-                best = opaque[int(np.argmax(v.sum(1)))] if v is not None and v.sum() > 0 else opaque[0]
-                cls_tex[sel] = best
-                print(f"transparent cap: {n} → {names[best]}")
+        if sel.sum() <= 0.25 * mask.sum():
+            continue
+        if np.median(np.hypot(labT[sel][:, 1], labT[sel][:, 2])) > 20:   # coloured glass (stained glass): keep
+            continue
+        opaque = [k for k, m in enumerate(names) if _lib(m.split("|")[0]).get("transmission", 0) <= 0]
+        if not opaque:
+            continue
+        bright = labT[sel][:, 0].mean() > 60
+        pref = [k for k in opaque if _lib(names[k].split("|")[0]).get("metallic", 0) < 0.5] if bright else []
+        cand = pref or opaque
+        v = votes[cand][:, sel.reshape(-1)]
+        best = cand[int(np.argmax(v.sum(1)))] if v.sum() > 0 else cand[0]
+        cls_tex[sel] = best
+        print(f"transparent cap: {n} → {names[best]}")
     # every colour region also gets the majority class of its texels (fallback for apply())
     for j, r in enumerate(spec["regions"]):
         sel = mask & (reg == j)

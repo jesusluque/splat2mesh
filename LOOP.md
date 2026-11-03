@@ -95,3 +95,9 @@ USDZ for every model, everything committed + pushed, complete tutorial, and an a
   of the object; secondary part > 50 % dropped; missing ENEAS frames padded; colour priors for unfound grey metals
   (low chroma, bright), coloured metals (F0 hue) and rubber (near black). Redos queued: owl, bowl, box, vase,
   cloisonné, boot, car. Web v6: 33 objects. Disk ~4 GB free.
+- 02:10 All 4 sets + redos done. Results of the last rules: owl → varnished wood; bowl → urushi + gold rim (colour
+  prior); vase → crackle glaze + kintsugi gold; boot → leather + rubber sole; car → paint + chrome bumpers + rubber
+  tyres; Tiffany → coloured glass shade 73 % + bronze; cloisonné → enamel/copper/bronze. Dropped masks keep their
+  class (empty) so colour priors can still claim it. Transparent cap only for colourless glass (median chroma ≤ 20);
+  reassigned bright texels prefer a non-metal. Known misses: watch crystal over the dial (glass 38 %), lacquer box
+  nacre panel, jade dragon's rosewood stand.

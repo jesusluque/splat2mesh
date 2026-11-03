@@ -64,10 +64,10 @@ for k in list(masks):
         continue
     cover = (masks[k] & obj).sum() / max(obj.sum(), 1)
     thin = any(w in k.split("|", 1)[1] for w in ("rim", "edge", "line", "wire", "trim", "hinge", "knob", "filament",
-                                                  "inlay", "band", "stripe", "cap", "cork", "wick", "chain", "eyelet"))
+                                                  "band", "stripe", "cap", "cork", "wick", "chain", "eyelet"))
     if cover > (0.15 if thin else 0.75):
         print("dropped (covers", round(float(cover), 2), "of the object):", k)
-        masks.pop(k)
+        masks[k] = np.zeros_like(masks[k])      # keep the material in the list so colour priors can still claim it
 print("annotation frame", ann, "| phrases", list(masks))
 if not masks:          # ENEAS found nothing: whole object = the description's main material
     import json as _j
