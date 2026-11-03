@@ -53,6 +53,12 @@ plain Linux), `ATHENEA_BUILD`.
    automatically to the render path**: athenea renders 87 views, TSDF fusion + visual hull.
 4. **xatlas** UVs, colour baked from the gaussians into a **4096²** atlas.
 
+`--upscale` first passes the object's crop through the **Iris-3B restorer** (×4, wavelet colour fix, then back to
+1024 — what Idol reads). Measured on the copper kettle: the picture stays the same object (PSNR 38.6 dB at 256 px,
+ΔE 0.5, silhouette IoU 0.995) and the splat comes out cleaner, with the hammering denser on the invented back too.
+A stronger generative re-invention (ILVR with Iris Turbo) looked sharper as a picture but Idol turned its extra
+grain into holes, so it is not used.
+
 ## 3. Materials, automatically
 
 ```sh

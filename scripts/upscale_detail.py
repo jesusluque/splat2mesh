@@ -37,6 +37,9 @@ ap.add_argument("--mix", type=float, default=0.3)
 ap.add_argument("--seed", type=int, default=7)
 ap.add_argument("--margin", type=float, default=1.2)
 ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cuda")
+ap.add_argument("--restore-only", default=None, metavar="OUT_PNG",
+                help="only the restorer: write the 1024 Idol input to OUT_PNG and stop (the measured best: ILVR "
+                     "re-invention adds grain that Idol turns into holes and stains on the invented side)")
 a = ap.parse_args()
 dev = torch.device(a.device)
 out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
@@ -52,12 +55,14 @@ def to_img(t):
 
 # 1) crop like Idol's synthetic preprocess
 src = Image.open(a.image).convert("RGB")
-arr = np.asarray(src)
-fg = arr.min(-1) < 245 if arr[0, 0].mean() > 128 else arr.max(-1) > 10
+arr = np.asarray(src).astype(np.float32)
+edge = np.concatenate([arr[:8].reshape(-1, 3), arr[-8:].reshape(-1, 3), arr[:, :8].reshape(-1, 3), arr[:, -8:].reshape(-1, 3)])
+bgc = np.median(edge, 0)                                    # the background colour (white, grey or black)
+fg = np.abs(arr - bgc).max(-1) > 30
 ys, xs = np.nonzero(fg)
 cy, cx = (ys.min() + ys.max()) / 2, (xs.min() + xs.max()) / 2
 side = int(max(ys.max() - ys.min(), xs.max() - xs.min()) * a.margin)
-bg = (255, 255, 255) if arr[0, 0].mean() > 128 else (0, 0, 0)
+bg = tuple(int(v) for v in bgc)
 canvas = Image.new("RGB", (side, side), bg)
 canvas.paste(src, (int(side / 2 - cx), int(side / 2 - cy)))
 crop = canvas
@@ -80,6 +85,10 @@ restored = rest(fit_budget(crop), color_fix=True)
 restored.save(out / "restored.png")
 print("restored", restored.size, round(time.time() - t0), "s", flush=True)
 del rest; gc.collect(); torch.mps.empty_cache() if dev.type == "mps" else None
+if a.restore_only:
+    restored.resize((1024, 1024), Image.Resampling.BOX).save(a.restore_only)
+    print("idol input", a.restore_only, flush=True)
+    sys.exit(0)
 
 # 3) ILVR with Iris Turbo
 from omegaconf import OmegaConf

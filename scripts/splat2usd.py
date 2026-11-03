@@ -80,7 +80,16 @@ def process(inp: Path, out_root: Path, a) -> dict:
     try:
         if inp.suffix.lower() in IMG:
             shutil.copy(inp, work / f"source{inp.suffix.lower()}")
-            ply = idol(inp, work, a.gaussians)
+            if a.upscale:              # Iris restorer on the object crop: crisper detail in, cleaner splat out
+                up = work / f"{inp.stem}_up.png"
+                sh(["bash", str(SHARED), str(ROOT / "third_party/iris-3b/.venv/bin/python"),
+                    str(ROOT / "scripts/upscale_detail.py"), str(inp), "", str(work / "upscale"),
+                    "--restore-only", str(up)], stdin=subprocess.DEVNULL)
+                rep["upscaled"] = True
+                ply = idol(up, work, a.gaussians)
+                (work / f"{up.stem}.ply").rename(work / f"{inp.stem}.ply"); ply = work / f"{inp.stem}.ply"
+            else:
+                ply = idol(inp, work, a.gaussians)
             y_down = not a.y_up            # Idol writes Y-down (COLMAP-style)
             antialias = False
             rep["t_idol_s"] = round(time.time() - t0, 1)
@@ -157,6 +166,8 @@ def main():
     ap.add_argument("--render-tex", type=int, default=2048, help="texture size cap on the render path")
     ap.add_argument("--skip-done", action="store_true", help="skip inputs whose report.json says ok")
     ap.add_argument("--gaussians", type=int, default=262144)
+    ap.add_argument("--upscale", action="store_true",
+                    help="pass the object crop through the Iris-3B restorer before Idol (Mac, ~4 min)")
     ap.add_argument("--y-down", action="store_true", help=".ply input is Y-down (COLMAP/Idol)")
     ap.add_argument("--y-up", action="store_true", help="override: Idol output already Y-up")
     ap.add_argument("--no-antialias", action="store_true", help="plain 3DGS .ply trained without Mip-Splatting")
