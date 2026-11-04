@@ -55,6 +55,7 @@ METAL_DETAIL_MIN = 0.75       # ...and may darken by at most this factor (deeper
 GLASS_SMOOTH_ITERS = 120      # Taubin iterations on glass/crystal/jade/wax vertices
 GLASS_WALL_MIN = 0.08         # glass thicker than this × object size is really a hollow wall (bulb, bowl, bottle)
 GLOSS_UNIFORM_SPREAD = 10.0   # Lab a*b* spread below which a glossy dielectric piece is one colour (paint, lacquer)
+GLASS_WALL_TINT = 0.35        # share of the glass tint applied per wall a ray crosses
 _RASTER = {}
 
 
@@ -965,9 +966,18 @@ def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
                      "tint": None if tint is None else [round(float(x), 4) for x in tint],   # linear RGB
                      "thin_walled": L.get("thin_walled", False), "ior": L.get("ior")}
     from .texture import inpaint
+    # spread the maps past the chart borders (nearest texel) so filtering at UV seams does not draw opaque lines
+    _, (iy, ix) = ndi.distance_transform_edt(~mask, return_indices=True)
+    T, S = T[iy, ix], S[iy, ix]
     for name, img in (("transmission", T), ("subsurface", S)):
         Image.fromarray((img[::-1].clip(0, 1) * 255).astype(np.uint8)).save(asset / f"{name}.png")
     Image.fromarray(((1 - 0.85 * T)[::-1].clip(0, 1) * 255).astype(np.uint8)).save(asset / "opacity.png")
+    # transmission colour: the glass tint applies at every wall a ray crosses (two for a thin-walled shell), so the
+    # per-wall colour is the tint pulled most of the way to white; opaque texels stay white (no effect)
+    tc = np.ones(base.shape, np.float32)
+    lb = lin(base)
+    tc = np.where((T > 0)[..., None], 1 - GLASS_WALL_TINT * (1 - lb), 1.0)[iy, ix]
+    Image.fromarray((srgb(np.clip(tc, 0, 1))[::-1] * 255).astype(np.uint8)).save(asset / "transmission_color.png")
     for name, img in (("roughness", Rmap), ("metallic", Mmap)):
         Image.fromarray((img[::-1].clip(0, 1) * 255).astype(np.uint8)).save(asset / f"{name}.png")
     Image.fromarray((np.stack([np.ones_like(Rmap), Rmap, Mmap], -1)[::-1].clip(0, 1) * 255).astype(np.uint8)).save(asset / "orm.png")
@@ -1013,7 +1023,8 @@ def _usd_add_mtlx(usd_path: Path, has_t: bool, has_s: bool, ior: float = 1.5, th
     ss.CreateInput("specular_IOR", Sdf.ValueTypeNames.Float).Set(ior)
     if has_t:
         ss.CreateInput("transmission", Sdf.ValueTypeNames.Float).ConnectToSource(img("transmission", "./transmission.png").ConnectableAPI(), "out")
-        ss.CreateInput("transmission_color", Sdf.ValueTypeNames.Color3f).ConnectToSource(bc.ConnectableAPI(), "out")   # glass tint
+        tcol = img("transmission_color", "./transmission_color.png", "color3")                 # per-wall glass tint
+        ss.CreateInput("transmission_color", Sdf.ValueTypeNames.Color3f).ConnectToSource(tcol.ConnectableAPI(), "out")
         ss.CreateInput("thin_walled", Sdf.ValueTypeNames.Bool).Set(bool(thin))
     if has_s:
         ss.CreateInput("subsurface", Sdf.ValueTypeNames.Float).ConnectToSource(img("subsurface", "./subsurface.png").ConnectableAPI(), "out")
