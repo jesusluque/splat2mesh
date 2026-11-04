@@ -870,7 +870,12 @@ def smooth_shading_normals(asset_dir, cls_tex, names) -> int:
         if _lib(n.split("|")[0]).get("roughness", 0.5) < 0.3:
             gl |= cls_tex == i
     glossy = (gl & mask).sum() / max(mask.sum(), 1)
-    it = 40 if glossy > 0.5 else 20
+    mi = np.zeros(mask.shape, bool)                      # mirror-like (chrome, polished silver): every bump shows
+    for i, n in enumerate(names):
+        if _lib(n.split("|")[0]).get("roughness", 0.5) < 0.2:
+            mi |= cls_tex == i
+    mirror = (mi & mask).sum() / max(mask.sum(), 1)
+    it = 100 if mirror > 0.5 else 40 if glossy > 0.5 else 20
     st = Usd.Stage.Open(str(asset / "asset.usda"))
     m = UsdGeom.Mesh(st.GetPrimAtPath("/Asset/Geom"))
     V = np.asarray(m.GetPointsAttr().Get(), np.float64)
