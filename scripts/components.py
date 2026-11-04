@@ -13,7 +13,7 @@ part is, at what scale) through its per-texel material votes. Steps, each cached
  1. ENEAS segments every component phrase on the reference picture itself (ixwin).
  2. Each component is cut out of the picture (its mask on white) → component image.
  3. Idol + direct meshing per component image (splat2usd --direct) → a closed mesh with its own UVs and texture.
- 4. The component mesh is placed on the whole object's faces voted for that phrase: bounding-box start, then ICP
+ 4. The component mesh is placed in its box from the reference mask (the whole mesh faces the picture), then ICP
     with scale (open3d). Components ENEAS / Idol could not produce keep the whole mesh's faces for that phrase.
  5. One USD: /Asset/Components/<part> (mesh + material from the library: metal F0, glass transmission, ...).
 """
@@ -21,6 +21,7 @@ import json, re, subprocess, sys
 from pathlib import Path
 import numpy as np
 from PIL import Image
+from scipy import ndimage as ndi
 
 ROOT = Path(__file__).resolve().parents[1]; sys.path.insert(0, str(ROOT))
 from splat2mesh.materials import parse_description, _lib
@@ -85,23 +86,99 @@ def face_labels(asset: Path):
     return V, F, lab
 
 
-def place(part_V, part_F, target_pts):
-    """Similarity transform of the component mesh onto the target points (bbox start + scaled ICP)."""
+def ref_box(ref: Path, mask: np.ndarray, V: np.ndarray):
+    """Where the component is in the whole object, from the reference picture: the whole mesh is made from that
+    picture seen from the front (x right, y up), so the mask's extent inside the object's silhouette maps linearly
+    onto the mesh's x and y extent; depth keeps the whole object's range."""
+    img = np.asarray(Image.open(ref).convert("RGB")).astype(np.float32)
+    bg = np.median(np.r_[img[:4].reshape(-1, 3), img[-4:].reshape(-1, 3), img[:, :4].reshape(-1, 3),
+                         img[:, -4:].reshape(-1, 3)], 0)
+    sil = np.abs(img - bg).max(-1) > 18
+    sil = ndi.binary_opening(sil, iterations=2)
+    lab_, n = ndi.label(sil)
+    if n:
+        sil = lab_ == (np.argmax(ndi.sum(sil, lab_, range(1, n + 1))) + 1)
+    if mask.shape != sil.shape:
+        mask = np.asarray(Image.fromarray(mask.astype(np.uint8) * 255).resize(sil.shape[::-1])) > 127
+    ys, xs = np.nonzero(sil); my, mx = np.nonzero(mask)
+    lo, hi = V.min(0), V.max(0)
+    fx = lambda x: lo[0] + (x - xs.min()) / max(np.ptp(xs), 1) * (hi[0] - lo[0])
+    fy = lambda y: hi[1] - (y - ys.min()) / max(np.ptp(ys), 1) * (hi[1] - lo[1])
+    blo = np.array([fx(np.percentile(mx, 1)), fy(np.percentile(my, 99)), lo[2]])
+    bhi = np.array([fx(np.percentile(mx, 99)), fy(np.percentile(my, 1)), hi[2]])
+    return blo, bhi
+
+
+ENVELOPE_SHARE = 0.5      # of another component's mask inside this one's: this one is a hollow envelope
+GLASS_SMOOTH_ITERS = 40   # Taubin iterations on transmissive components
+BOX_SCALE_TOL = 0.25       # ICP may change the box-fitted scale by at most this much
+
+
+def place(part_V, part_F, target_pts, box):
+    """Similarity transform of the component mesh into its box from the reference picture (x/y extent fitted, depth
+    centred), refined by scaled ICP on the whole mesh's surface inside the box. Fitness: share of the component's
+    points that land on that surface."""
     import open3d as o3d
-    lo, hi = part_V.min(0), part_V.max(0); tlo, thi = target_pts.min(0), target_pts.max(0)
-    s = np.linalg.norm(thi - tlo) / max(np.linalg.norm(hi - lo), 1e-9)
-    T0 = np.eye(4); T0[:3, :3] *= s; T0[:3, 3] = (tlo + thi) / 2 - s * (lo + hi) / 2
+    blo, bhi = box
+    lo, hi = part_V.min(0), part_V.max(0)
+    s = np.mean((bhi[:2] - blo[:2]) / np.maximum(hi[:2] - lo[:2], 1e-9))
+    T0 = np.eye(4); T0[:3, :3] *= s; T0[:3, 3] = (blo + bhi) / 2 - s * (lo + hi) / 2
+    diag = np.linalg.norm(bhi - blo)
     src = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(part_V), o3d.utility.Vector3iVector(part_F))
     src_pc = src.sample_points_uniformly(20000)
-    dst = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(target_pts))
-    thr = 0.15 * np.linalg.norm(thi - tlo)
+    pad = 0.08 * diag
+    inside = np.all((target_pts > blo - pad) & (target_pts < bhi + pad), 1)
+    tp = target_pts[inside] if inside.sum() > 200 else target_pts
+    dst = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(tp))
+    thr = 0.1 * diag
     reg = o3d.pipelines.registration.registration_icp(
         src_pc, dst, thr, T0, o3d.pipelines.registration.TransformationEstimationPointToPoint(with_scaling=True),
-        o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=200))
-    return reg.transformation, float(reg.fitness), float(reg.inlier_rmse) / max(np.linalg.norm(thi - tlo), 1e-9)
+        o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=100))
+    T = reg.transformation
+    s1 = np.cbrt(abs(np.linalg.det(T[:3, :3])))
+    if abs(s1 / s - 1) > BOX_SCALE_TOL:                       # ICP drifted away from the picture: keep the box fit
+        T = T0
+    ev = o3d.pipelines.registration.evaluate_registration(src_pc, dst, thr, T)
+    return T, float(ev.fitness), float(ev.inlier_rmse) / max(diag, 1e-9)
 
 
-def write_usd(out: Path, parts):
+CONTACT_DILATE = 6         # px: reference masks this close touch, so the parts must touch in 3D
+CONTACT_OVERLAP = 0.01     # of the object size: the closed joint overlaps a little, no visible seam
+
+
+def close_contacts(parts, geo, report):
+    """Generated components are placed one by one and can float apart. Two components whose masks touch in the
+    reference picture touch in the object: the smaller one moves along the line between their picture centres
+    (x right, y up) until its extent meets the bigger one's."""
+    names = sorted(geo, key=lambda n: -geo[n][1].sum())
+    shift = {n: np.zeros(3) for n in names}
+    allp = np.concatenate([geo[n][0] for n in names]) if names else np.zeros((1, 3))
+    size = np.linalg.norm(np.ptp(allp, 0))
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            ma, mb = geo[a][1], geo[b][1]
+            if not (ndi.binary_dilation(ma, iterations=CONTACT_DILATE) & mb).any():
+                continue
+            ca = np.argwhere(ma).mean(0); cb = np.argwhere(mb).mean(0)
+            d = np.array([cb[1] - ca[1], ca[0] - cb[0], 0.0]); d /= max(np.linalg.norm(d), 1e-9)   # a → b
+            pa = (geo[a][0] + shift[a]) @ d; pb = (geo[b][0] + shift[b]) @ d
+            gap = np.percentile(pb, 1) - np.percentile(pa, 99)         # > 0: b floats beyond a
+            mv = -(gap + CONTACT_OVERLAP * size) * d
+            shift[b] = shift[b] + mv
+            report[b]["contact_shift"] = round(float(-(gap + CONTACT_OVERLAP * size) / size), 4)
+    outp = []
+    for name, cls, V, F, uv, tex in parts:
+        t = shift.get(name)
+        if t is None or not t.any():
+            outp.append((name, cls, V, F, uv, tex)); continue
+        if cls is None:                       # referenced component: V is its 4x4 transform
+            T = V.copy(); T[:3, 3] += t; outp.append((name, cls, T, F, uv, tex))
+        else:
+            outp.append((name, cls, V + t, F, uv, tex))
+    return outp
+
+
+def write_usd(out: Path, parts, thin=()):
     """parts: [(name, material class, V, F, uv or None, texture path or None)]"""
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
     st = Usd.Stage.CreateNew(str(out / "asset.usda"))
@@ -161,6 +238,9 @@ def write_usd(out: Path, parts):
             ss.CreateInput("base_color", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*map(float, L["f0"])))
         elif trans > 0:
             ss.CreateInput("base_color", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(1, 1, 1))
+        if trans > 0 and name in thin:
+            # an envelope with parts inside (a bulb, a jar): a thin shell, not a solid lump of glass
+            ss.CreateInput("thin_walled", Sdf.ValueTypeNames.Bool).Set(True)
         mat.CreateSurfaceOutput("mtlx").ConnectToSource(ss.ConnectableAPI(), "out")
         UsdShade.MaterialBindingAPI.Apply(m.GetPrim()).Bind(mat)
     st.GetRootLayer().Save()
@@ -183,7 +263,7 @@ def main():
     names_whole = json.loads((whole / "mat" / "regions.json").read_text()).get("names")
     V, F, lab = face_labels(whole)
     wnames = names_whole or [f"{c}|{t}" for c, t in parse_description((whole.parent / "materials.txt").read_text())]
-    parts, report = [], {}
+    parts, report, geo = [], {}, {}
     for (ph, mats), (cls, _) in zip(comps, items_c):
         name = slug(ph)
         multi = ":" in mats
@@ -212,8 +292,7 @@ def main():
                 PV = np.asarray(pm.GetPointsAttr().Get(), np.float64)
                 PF = np.asarray(pm.GetFaceVertexIndicesAttr().Get(), np.int64).reshape(-1, 3)
                 PUV = np.asarray(UsdGeom.PrimvarsAPI(pm).GetPrimvar("st").Get(), np.float64)
-                tgt = V[F[tgt_faces]].mean(1)
-                T, fit, rmse = place(PV, PF, tgt)
+                T, fit, rmse = place(PV, PF, V[F].mean(1), ref_box(ref, m, V))
                 rep.update(icp_fitness=round(fit, 3), icp_rmse=round(rmse, 4))
                 if fit > 0.3:
                     PV2 = (np.c_[PV, np.ones(len(PV))] @ T.T)[:, :3]
@@ -224,8 +303,19 @@ def main():
                                             str(usd_dir), str(img), mats], check=False)
                         parts.append((name, None, T, usd_dir, None, None))
                     else:
+                        if float(_lib(cls).get("transmission", 0)) > 0:
+                            # glass is smooth: Idol's lumps refract like stones, so the surface is relaxed
+                            import trimesh
+                            # smoothed on the welded surface: UV seams duplicate vertices, which would split apart
+                            key = np.round(PV2 / (1e-6 * np.linalg.norm(np.ptp(PV2, 0)))).astype(np.int64)
+                            _, first, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
+                            inv = inv.ravel()
+                            tm = trimesh.Trimesh(PV2[first].copy(), inv[PF], process=False)
+                            trimesh.smoothing.filter_taubin(tm, iterations=GLASS_SMOOTH_ITERS)
+                            PV2 = np.asarray(tm.vertices)[inv]
                         parts.append((name, cls, PV2, PF, PUV, usd_dir / "basecolor.png"))
                     placed = True
+                    geo[name] = (PV2, m)
                     rep["source"] = "generated" + (" (own materials)" if multi else "")
         if not placed and len(tgt_faces):
             # keep the whole mesh's faces for this component
@@ -233,7 +323,18 @@ def main():
             parts.append((name, cls, V[used], remap[F[tgt_faces]], None, None)); rep["source"] = "whole mesh"
         report[name] = rep
         print(name, rep, flush=True)
-    write_usd(out, parts)
+    parts = close_contacts(parts, geo, report)
+    # envelopes: a component whose picture mask holds a good share of another component's mask (the filament seen
+    # through the bulb) is hollow
+    thin = set()
+    for ph, _ in comps:
+        if ph not in z.files:
+            continue
+        a = z[ph][0]
+        for q, _ in comps:
+            if q != ph and q in z.files and z[q][0].sum() < a.sum() and (a & z[q][0]).sum() > ENVELOPE_SHARE * z[q][0].sum():
+                thin.add(slug(ph)); report[slug(ph)]["envelope"] = True
+    write_usd(out, parts, thin)
     (out / "components.json").write_text(json.dumps(report, indent=1))
 
 
