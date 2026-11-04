@@ -1,0 +1,54 @@
+"""Per-component reconstruction with no hand-written part list: deepseek-flash looks at the reference picture and
+names the object's separate physical components and the library material of each, then components.py makes
+each one (ENEAS mask → Iris clean picture chosen by deepseek → Idol → placed by its mask) and assembles them.
+
+    python scripts/auto_components.py REF.png WHOLE_ASSET_DIR OUT_DIR
+Writes OUT_DIR/parts_list.json (the model's answer) and everything components.py writes.
+"""
+import base64, io, json, subprocess, sys
+from pathlib import Path
+from PIL import Image
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path.home() / ".claude/skills/research-deepseek/scripts"))
+import dsr
+
+MAX_PARTS = 8
+PROMPT = ("This photo shows one object. List its separate physical components that a 3D artist would model as "
+          "separate meshes: parts that are visibly distinct pieces (different material, or a piece mounted on another), "
+          "each large enough to be seen clearly (not tiny details or decals). At most {n}, biggest first. For each give a "
+          "short English noun phrase starting with 'the' that a segmentation model can find in the photo (e.g. 'the "
+          "front wheel'), and its material, chosen ONLY from this list: {mats}. Also say if the part is a body of revolution (round all "
+          "around one axis, like a wheel, a tyre, a bottle, a cup or a bulb). Answer JSON: {{\"parts\": [{{\"phrase\": "
+          "..., \"material\": ..., \"revolution\": true|false}}]}}")
+
+
+def list_parts(ref: Path):
+    mats = list(json.loads((ROOT / "splat2mesh/material_library.json").read_text())["materials"])
+    b = io.BytesIO(); Image.open(ref).convert("RGB").save(b, "JPEG", quality=90)
+    url = "data:image/jpeg;base64," + base64.b64encode(b.getvalue()).decode()
+    body = {"model": "deepseek-flash", "temperature": 0.1, "response_format": {"type": "json_object"},
+            "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}},
+                                                      {"type": "text", "text": PROMPT.format(n=MAX_PARTS, mats=", ".join(mats))}]}]}
+    import urllib.request
+    req = urllib.request.Request(dsr.API, data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json", "Authorization": "Bearer " + dsr.key()})
+    j = json.loads(json.load(urllib.request.urlopen(req, timeout=300))["choices"][0]["message"]["content"])
+    parts, seen = [], set()
+    for p in j.get("parts", [])[:MAX_PARTS]:
+        ph, m = str(p.get("phrase", "")).strip().lower(), str(p.get("material", "")).strip().lower()
+        if not ph or ph in seen or m not in mats:
+            continue
+        seen.add(ph); parts.append((ph if ph.startswith("the ") else "the " + ph, m + ("@rev" if p.get("revolution") is True else "")))
+    return parts
+
+
+if __name__ == "__main__":
+    ref, whole, out = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+    out.mkdir(parents=True, exist_ok=True)
+    lf = out / "parts_list.json"
+    parts = [tuple(p) for p in json.loads(lf.read_text())] if lf.exists() else list_parts(ref)
+    lf.write_text(json.dumps(parts, indent=1))
+    print("parts:", parts, flush=True)
+    subprocess.run([str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/components.py"), str(ref), str(whole), str(out),
+                    *[f"{ph}={m}" for ph, m in parts]], check=True)

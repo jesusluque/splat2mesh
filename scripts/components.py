@@ -86,6 +86,262 @@ def face_labels(asset: Path):
     return V, F, lab
 
 
+USE_IRIS = __import__("os").environ.get("COMP_IRIS", "1") == "1"
+IRIS_SIGMAS = ["0.938", "0.833", "0.625"]
+
+
+def iris_picture(ref, phrase, material, cut, others, out):
+    """The part alone, complete, on white: Iris-3B Turbo img2img from the cut-out at three redraw levels, and
+    deepseek-flash picks the one that shows only that part with the reference's shape and material (or none)."""
+    d = out / "iris"; d.mkdir(exist_ok=True)
+    slug_ = re.sub(r"[^a-z0-9]+", "_", re.sub(r"^the\s+", "", phrase.strip().lower())).strip("_")
+    cands = [d / f"{slug_}_s{s}.png" for s in IRIS_SIGMAS]
+    if not all(c.exists() for c in cands):
+        item = f"{phrase}={material}={cut}"
+        subprocess.run(["bash", str(Path.home() / "luc/athenea-gpu/shared.sh"), str(ROOT / "third_party/iris-3b/.venv/bin/python"),
+                        str(ROOT / "scripts/iris_parts.py"), str(d), item, "--start-sigma", *IRIS_SIGMAS], check=False)
+    cands = [c for c in cands if c.exists()]
+    if not cands:
+        return None
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import pick_parts
+    try:
+        r = pick_parts.pick(ref, [(phrase, cut, cands)])[phrase]
+    except Exception as e:
+        print("pick failed", e, flush=True); return None
+    return r["chosen"]
+
+
+REVOLUTION = set()
+LATHE_H, LATHE_T, LATHE_SEG = 64, 72, 128
+
+
+def lathe(V, F, UV, tex, tex_out):
+    """A body of revolution is round all the way, also where the picture hid it (a wheel behind the body): the
+    generated mesh becomes a turned surface. Axis: the principal direction whose spread differs from the other two.
+    Profile r(h): per height band, the median over angle sectors of the outermost radius (hidden or invented sectors
+    are outvoted). Colour: per (height, angle) texel, the generated texture at the nearest original point."""
+    from scipy.spatial import cKDTree
+    c = V.mean(0); X = V - c
+    w, E = np.linalg.eigh(np.cov(X.T))                       # ascending
+    ax = E[:, 0] if (w[1] - w[0]) > (w[2] - w[1]) else E[:, 2]
+    u = np.cross(ax, [1, 0, 0] if abs(ax[0]) < 0.9 else [0, 1, 0]); u /= np.linalg.norm(u); v = np.cross(ax, u)
+    h = X @ ax; r = np.hypot(X @ u, X @ v); th = np.arctan2(X @ v, X @ u)
+    hb = np.clip(((h - h.min()) / max(np.ptp(h), 1e-9) * LATHE_H).astype(int), 0, LATHE_H - 1)
+    tb = np.clip(((th + np.pi) / (2 * np.pi) * LATHE_T).astype(int), 0, LATHE_T - 1)
+    rmax = np.full((LATHE_H, LATHE_T), np.nan)
+    np.fmax.at(rmax, (hb, tb), r)
+    prof = np.nanmedian(rmax, 1)
+    prof = np.interp(np.arange(LATHE_H), np.nonzero(~np.isnan(prof))[0], prof[~np.isnan(prof)])
+    prof = np.convolve(np.pad(prof, 2, mode="edge"), np.ones(5) / 5, "valid")
+    hs = np.linspace(h.min(), h.max(), LATHE_H)
+    ang = np.linspace(-np.pi, np.pi, LATHE_SEG, endpoint=False)
+    ring = lambda i: c + hs[i] * ax + prof[i] * (np.cos(ang)[:, None] * u + np.sin(ang)[:, None] * v)
+    P = np.concatenate([ring(i) for i in range(LATHE_H)] + [[c + hs[0] * ax], [c + hs[-1] * ax]])
+    Fs = []
+    for i in range(LATHE_H - 1):
+        for j in range(LATHE_SEG):
+            a, b = i * LATHE_SEG + j, i * LATHE_SEG + (j + 1) % LATHE_SEG
+            Fs += [[a, b, b + LATHE_SEG], [a, b + LATHE_SEG, a + LATHE_SEG]]
+    c0, c1 = len(P) - 2, len(P) - 1; top = (LATHE_H - 1) * LATHE_SEG
+    for j in range(LATHE_SEG):
+        Fs += [[c0, (j + 1) % LATHE_SEG, j], [c1, top + j, top + (j + 1) % LATHE_SEG]]
+    Fn = np.array(Fs)
+    # orient outwards
+    import trimesh
+    tm = trimesh.Trimesh(P, Fn, process=False)
+    if tm.volume < 0:
+        Fn = Fn[:, ::-1]
+    # texture: (angle, height) grid sampled from the generated texture at the nearest original vertex
+    uvn = np.r_[np.c_[np.tile(np.arange(LATHE_SEG) / LATHE_SEG, LATHE_H), np.repeat(hs - hs.min(), LATHE_SEG) / max(np.ptp(hs), 1e-9)],
+                [[0.5, 0.0], [0.5, 1.0]]]
+    tree = cKDTree(V)
+    R = 512
+    gy, gx = np.mgrid[0:R, 0:R]
+    gh = h.min() + (1 - (gy + 0.5) / R) * np.ptp(h); ga = -np.pi + (gx + 0.5) / R * 2 * np.pi
+    gi = np.interp(gh, hs, prof)
+    pts = c + gh[..., None] * ax + gi[..., None] * (np.cos(ga)[..., None] * u + np.sin(ga)[..., None] * v)
+    _, nn = tree.query(pts.reshape(-1, 3))
+    src = np.asarray(Image.open(tex).convert("RGB")); S_ = src.shape[0]
+    suv = UV[nn] if len(UV) == len(V) else np.zeros((len(nn), 2))
+    px = np.clip((suv[:, 0] * S_).astype(int), 0, S_ - 1); py = np.clip(((1 - suv[:, 1]) * S_).astype(int), 0, S_ - 1)
+    Image.fromarray(src[py, px].reshape(R, R, 3)).save(tex_out)
+    return P, Fn, uvn, tex_out
+
+
+MAIN_PICTURE = {}
+SAME_MASK_IOU = 0.9        # two phrases ENEAS answered with the same mask: one component
+MAIN_COVER = 0.6           # the main part's mask covers less than this of what is left: it takes the rest
+
+
+def silhouette(ref: Path, shape):
+    img = np.asarray(Image.open(ref).convert("RGB").resize(shape[::-1])).astype(np.float32)
+    bg = np.median(np.r_[img[:4].reshape(-1, 3), img[-4:].reshape(-1, 3), img[:, :4].reshape(-1, 3),
+                         img[:, -4:].reshape(-1, 3)], 0)
+    sil = ndi.binary_opening(np.abs(img - bg).max(-1) > 18, iterations=2)
+    lab_, n = ndi.label(sil)
+    return lab_ == (np.argmax(ndi.sum(sil, lab_, range(1, n + 1))) + 1) if n else sil
+
+
+def merge_and_complete(ref, comps, z):
+    """1. Phrases with the same mask are one component (ENEAS finds the same wheel for 'the front tire' and 'the
+    front wheel rim'): the first keeps it; differing materials make it a multi-material component.
+    2. The first part (the biggest, the main body) takes the object's silhouette minus the other parts when its own
+    mask covers only a piece of that (ENEAS found the bonnet for 'the car body')."""
+    keep = []
+    for ph, mats in comps:
+        if ph not in z:
+            keep.append([ph, mats]); continue
+        a = z[ph][0]
+        for k in keep:
+            if k[0] in z:
+                b = z[k[0]][0]
+                if (a & b).sum() > SAME_MASK_IOU * max((a | b).sum(), 1):
+                    m0 = k[1].split(":")[0].strip() if ":" not in k[1] else None
+                    mine = mats.replace("@rev", "")
+                    if slug(k[0]) in REVOLUTION:
+                        pass                  # a turned part stays one material: its texture keeps the rest
+                    elif m0 is not None and mine != m0.replace("@rev", ""):
+                        k[1] = f"{m0.replace('@rev', '')}: {k[0]}; {mine}: {ph}"
+                    elif m0 is None and mine not in k[1]:
+                        k[1] += f"; {mine}: {ph}"
+                    print("same mask:", ph, "→", k[0], flush=True)
+                    break
+        else:
+            keep.append([ph, mats])
+    comps = [tuple(k) for k in keep]
+    if comps and comps[0][0] in z:
+        main = comps[0][0]; m = z[main][0]
+        rest = silhouette(ref, m.shape)
+        for ph, _ in comps[1:]:
+            if ph in z:
+                rest &= ~z[ph][0]
+        if (m & rest).sum() < MAIN_COVER * rest.sum():
+            z[main] = (m | rest)[None]
+            # its picture is the whole silhouette: holes where other parts sit would become white discs and walls
+            MAIN_PICTURE[slug(main)] = silhouette(ref, m.shape)
+            print("main part takes the rest of the silhouette:", main, round(float(m.mean()), 3), "→",
+                  round(float((m | rest).mean()), 3), flush=True)
+    return comps, z
+
+
+ORBIT_N, ORBIT_E, ORBIT_SIZE = 16, 15.0, 768      # the cameras of materials.render_orbit
+
+
+def orbit_cam(V, i):
+    lo, hi = V.min(0), V.max(0); c = (lo + hi) / 2; rad = np.linalg.norm(hi - lo) / 2
+    f = ORBIT_SIZE / 2 / np.tan(np.radians(15)); dist = rad / np.sin(np.radians(15)) * 1.1
+    a, e = 2 * np.pi * i / ORBIT_N, np.radians(ORBIT_E)
+    eye = c + dist * np.array([np.sin(a) * np.cos(e), np.sin(e), np.cos(a) * np.cos(e)])
+    fw = c - eye; fw /= np.linalg.norm(fw); rt = np.cross(fw, [0, 1, 0]); rt /= np.linalg.norm(rt); dn = np.cross(fw, rt)
+    return eye, np.stack([rt, dn, fw]), f
+
+
+def view_hits(V, F, i):
+    """Per pixel of orbit view i: the 3D surface point hit (NaN where the ray misses)."""
+    import open3d as o3d
+    eye, M, f = orbit_cam(V, i)
+    u, v = np.meshgrid(np.arange(ORBIT_SIZE) + .5, np.arange(ORBIT_SIZE) + .5)
+    d = np.stack([(u - ORBIT_SIZE / 2) / f, (v - ORBIT_SIZE / 2) / f, np.ones_like(u)], -1) @ M
+    sc = o3d.t.geometry.RaycastingScene(); sc.add_triangles(V.astype(np.float32), F.astype(np.uint32))
+    r = sc.cast_rays(o3d.core.Tensor(np.concatenate([np.broadcast_to(eye, d.shape), d], -1).reshape(-1, 6).astype(np.float32)))
+    t = r["t_hit"].numpy().reshape(ORBIT_SIZE, ORBIT_SIZE)
+    P = eye + d * t[..., None]; P[~np.isfinite(t)] = np.nan
+    return P
+
+
+def fg_box(a, white_bg):
+    a = np.asarray(a, np.float32)
+    fg = a.min(-1) < 245 if white_bg else a.max(-1) > 10
+    ys, xs = np.nonzero(fg)
+    return ys.min(), ys.max(), xs.min(), xs.max()
+
+
+def mask_to_view(mask, ref_img, frame_img):
+    """The reference mask carried into the orbit frame that looks like the reference: foreground boxes matched."""
+    ry0, ry1, rx0, rx1 = fg_box(ref_img, True)
+    fy0, fy1, fx0, fx1 = fg_box(frame_img, True)
+    my, mx = np.nonzero(mask)
+    sy = (fy1 - fy0) / max(ry1 - ry0, 1); sx = (fx1 - fx0) / max(rx1 - rx0, 1)
+    py = np.clip(((my - ry0) * sy + fy0).astype(int), 0, ORBIT_SIZE - 1)
+    px = np.clip(((mx - rx0) * sx + fx0).astype(int), 0, ORBIT_SIZE - 1)
+    out = np.zeros((ORBIT_SIZE, ORBIT_SIZE), bool); out[py, px] = True
+    return ndi.binary_closing(out, iterations=2)
+
+
+def best_view(orbit_dir, image):
+    """Orbit frame most like the picture: both cropped to their foreground (white or light backgrounds)."""
+    def crop(a, box):
+        y0, y1, x0, x1 = box
+        return np.asarray(Image.fromarray(np.asarray(a)[y0:y1 + 1, x0:x1 + 1]).resize((96, 96)), np.float32)
+    im = Image.open(image).convert("RGB")
+    sil = silhouette(Path(image), im.size[::-1]); ys, xs = np.nonzero(sil)
+    ref = crop(im, (ys.min(), ys.max(), xs.min(), xs.max()))
+    frames = sorted((Path(orbit_dir) / "frames").glob("*.jpg"))
+    sc = []
+    for f in frames:
+        a = np.asarray(Image.open(f).convert("RGB")); sc.append(-np.abs(crop(a, fg_box(a, True)) - ref).mean())
+    return int(np.argmax(sc))
+
+
+def place_view(PV, PF, part_dir, part_img, V, F, mask, ref, whole):
+    """Similarity transform of a generated part into the whole object, through the views: the reference picture is
+    the whole's orbit view that looks most like it; the part's picture is the part's orbit view that looks most like
+    it. Both are the same camera, so the rotation is the one between those two orbit cameras; scale and position
+    match the part's visible points to the whole's surface under the reference mask (box + front depth), then ICP."""
+    from splat2mesh.materials import render_orbit
+    import open3d as o3d
+    wo = whole / "mat" / "orbit"
+    vw = best_view(wo, ref)
+    frame = Image.open(sorted((wo / "frames").glob("*.jpg"))[vw]).convert("RGB")
+    refi = Image.open(ref).convert("RGB").resize(mask.shape[::-1])
+    mv = mask_to_view(mask, refi, frame)
+    Pw = view_hits(V, F, vw)[mv]; Pw = Pw[np.isfinite(Pw).all(1)]
+    po = part_dir / "mat" / "orbit"
+    if not (po / "frames").exists():
+        render_orbit(part_dir, po)
+    best = None
+    _, Mw, _ = orbit_cam(V, vw)
+    cw = Pw @ Mw.T
+    ew = np.percentile(cw[:, :2], 98, 0) - np.percentile(cw[:, :2], 2, 0)
+    mid_w = (np.percentile(cw[:, :2], 98, 0) + np.percentile(cw[:, :2], 2, 0)) / 2
+    diag = float(np.linalg.norm(ew))
+    dst = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(Pw))
+    vlike = best_view(po, part_img)
+    # every orbit view of the part is a candidate rotation (the picture-likeness of thin parts is ambiguous): the
+    # one whose visible points fit the whole's surface under the mask best wins; ties go to the most alike view
+    for vp in range(ORBIT_N):
+        Pp = view_hits(PV, PF, vp).reshape(-1, 3); Pp = Pp[np.isfinite(Pp).all(1)]
+        if len(Pw) < 100 or len(Pp) < 100:
+            continue
+        Pp = Pp[np.random.default_rng(0).permutation(len(Pp))[:20000]]
+        _, Mp, _ = orbit_cam(PV, vp)
+        R = Mw.T @ Mp
+        cp = (Pp @ R.T) @ Mw.T
+        ep = np.percentile(cp[:, :2], 98, 0) - np.percentile(cp[:, :2], 2, 0)
+        sc = float(np.mean(ew / np.maximum(ep, 1e-9)))
+        mid_p = (np.percentile(cp[:, :2], 98, 0) + np.percentile(cp[:, :2], 2, 0)) / 2 * sc
+        dz = np.percentile(cw[:, 2], 5) - np.percentile(cp[:, 2], 5) * sc      # front surfaces meet
+        T0 = np.eye(4); T0[:3, :3] = sc * R; T0[:3, 3] = Mw.T @ np.r_[mid_w - mid_p, dz]
+        src = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(Pp))
+        reg = o3d.pipelines.registration.registration_icp(
+            src, dst, 0.1 * diag, T0, o3d.pipelines.registration.TransformationEstimationPointToPoint(with_scaling=True),
+            o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=40))
+        T = reg.transformation
+        if abs(np.cbrt(abs(np.linalg.det(T[:3, :3]))) / sc - 1) > BOX_SCALE_TOL:
+            T = T0
+        ev = o3d.pipelines.registration.evaluate_registration(src, dst, 0.1 * diag, T)
+        # two-way: the part's points on the whole surface and the whole's mask points covered by the part
+        back = o3d.pipelines.registration.evaluate_registration(dst, src.transform(T), 0.1 * diag, np.eye(4))
+        score = ev.fitness * back.fitness + (0.01 if vp == vlike else 0)
+        if best is None or score > best[0]:
+            best = (score, T, ev.fitness * back.fitness, ev.inlier_rmse, vp)
+    if best is None:
+        return None
+    _, T, fit, rmse, vp = best
+    return T, float(fit), float(rmse) / max(diag, 1e-9), {"whole_view": int(vw), "part_view": int(vp)}
+
+
 def ref_box(ref: Path, mask: np.ndarray, V: np.ndarray):
     """Where the component is in the whole object, from the reference picture: the whole mesh is made from that
     picture seen from the front (x right, y up), so the mask's extent inside the object's silhouette maps linearly
@@ -165,6 +421,8 @@ def close_contacts(parts, geo, report):
             d = np.array([cb[1] - ca[1], ca[0] - cb[0], 0.0]); d /= max(np.linalg.norm(d), 1e-9)   # a → b
             pa = (geo[a][0] + shift[a]) @ d; pb = (geo[b][0] + shift[b]) @ d
             gap = np.percentile(pb, 1) - np.percentile(pa, 99)         # > 0: b floats beyond a
+            if gap <= 0:
+                continue                      # already touching or overlapping: placed parts are not pushed out
             mv = -(gap + CONTACT_OVERLAP * size) * d
             shift[b] = shift[b] + mv
             report[b]["contact_shift"] = round(float(-(gap + CONTACT_OVERLAP * size) / size), 4)
@@ -240,6 +498,14 @@ def write_usd(out: Path, parts, thin=()):
             ss.CreateInput("base_color", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*map(float, L["f0"])))
         elif trans > 0:
             ss.CreateInput("base_color", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(1, 1, 1))
+        elif tex is not None and uv is not None:
+            # dielectric with its generated texture: the path tracer reads base_color, not the preview diffuse
+            im = UsdShade.Shader.Define(st, xf + "/Mat/MtlxBaseColor"); im.CreateIdAttr("ND_image_color3")
+            fi = im.CreateInput("file", Sdf.ValueTypeNames.Asset); fi.Set("./" + str(Path(tex).relative_to(out)))
+            fi.GetAttr().SetColorSpace("srgb_texture")
+            im.CreateOutput("out", Sdf.ValueTypeNames.Color3f)
+            ss.CreateInput("base_color", Sdf.ValueTypeNames.Color3f).ConnectToSource(im.ConnectableAPI(), "out")
+            ss.CreateInput("base", Sdf.ValueTypeNames.Float).Set(1.0)
         if trans > 0 and name in thin:
             # an envelope with parts inside (a bulb, a jar): a thin shell, not a solid lump of glass
             ss.CreateInput("thin_walled", Sdf.ValueTypeNames.Bool).Set(True)
@@ -255,12 +521,16 @@ def main():
     comps = []
     for a in sys.argv[4:]:
         ph, mats = a.split("=", 1)
+        if mats.strip().endswith("@rev"):          # a body of revolution (wheel, bottle, cup): turned, see lathe()
+            REVOLUTION.add(slug(ph.strip())); mats = mats.strip()[:-4]
         comps.append((ph.strip(), mats.strip()))
     items_c = [(m.split(":")[0].strip() if ":" in m else m, ph) for ph, m in comps]
     # 1. components on the reference picture
     phrases = [ph for ph, _ in comps]
     eneas_on_reference(ref, phrases, out / "masks_ref.npz")
-    z = np.load(out / "masks_ref.npz")
+    z = {k: v for k, v in np.load(out / "masks_ref.npz").items()}
+    comps, z = merge_and_complete(ref, comps, z)
+    items_c = [(m.split(":")[0].strip() if ":" in m else m, ph) for ph, m in comps]
     # layout: the whole object's faces per phrase (its material votes)
     names_whole = json.loads((whole / "mat" / "regions.json").read_text()).get("names")
     V, F, lab = face_labels(whole)
@@ -270,7 +540,7 @@ def main():
         name = slug(ph)
         multi = ":" in mats
         sub = parse_description(mats) if multi else []
-        m = z[ph][0] if ph in z.files else None
+        m = z[ph][0] if ph in z else None
         share = float(m.mean()) if m is not None else 0.0
         # where the component is in the whole object: faces the whole asset voted for this phrase (or for any of
         # its sub-parts' phrases)
@@ -281,7 +551,11 @@ def main():
         if m is not None and share >= MIN_MASK:              # its place comes from the picture mask
             img = out / "parts" / f"{name}.png"; img.parent.mkdir(exist_ok=True)
             if not img.exists():
-                cut_out(ref, m, img)
+                cut = out / "parts" / f"{name}_cut.png"
+                cut_out(ref, MAIN_PICTURE.get(name, m), cut)
+                chosen = iris_picture(ref, ph, cls, cut, [p for p, _ in comps if p != ph], out) if USE_IRIS else None
+                Image.open(chosen or cut).save(img)
+                rep["picture"] = "iris " + Path(chosen).stem if chosen else "cut-out"
             run = out / "runs"
             usd_dir = run / name / "usd"
             if not (usd_dir / "asset.usda").exists():
@@ -294,7 +568,16 @@ def main():
                 PV = np.asarray(pm.GetPointsAttr().Get(), np.float64)
                 PF = np.asarray(pm.GetFaceVertexIndicesAttr().Get(), np.int64).reshape(-1, 3)
                 PUV = np.asarray(UsdGeom.PrimvarsAPI(pm).GetPrimvar("st").Get(), np.float64)
-                T, fit, rmse = place(PV, PF, V[F].mean(1), ref_box(ref, m, V))
+                pv = None
+                if (whole / "mat" / "orbit" / "frames").exists():
+                    try:
+                        pv = place_view(PV, PF, usd_dir, img, V, F, m, ref, whole)
+                    except Exception as e:
+                        print("view placement failed", name, e, flush=True)
+                if pv is not None:
+                    T, fit, rmse, views = pv; rep.update(views)
+                else:
+                    T, fit, rmse = place(PV, PF, V[F].mean(1), ref_box(ref, m, V))
                 rep.update(icp_fitness=round(fit, 3), icp_rmse=round(rmse, 4))
                 if fit > 0.3:
                     PV2 = (np.c_[PV, np.ones(len(PV))] @ T.T)[:, :3]
@@ -315,7 +598,11 @@ def main():
                             tm = trimesh.Trimesh(PV2[first].copy(), inv[PF], process=False)
                             trimesh.smoothing.filter_taubin(tm, iterations=GLASS_SMOOTH_ITERS)
                             PV2 = np.asarray(tm.vertices)[inv]
-                        parts.append((name, cls, PV2, PF, PUV, usd_dir / "basecolor.png"))
+                        tex = usd_dir / "basecolor.png"
+                        if name in REVOLUTION:
+                            PV2, PF, PUV, tex = lathe(PV2, PF, PUV, tex, out / "parts" / f"{name}_lathe.png")
+                            rep["revolution"] = True
+                        parts.append((name, cls, PV2, PF, PUV, tex))
                     placed = True
                     geo[name] = (PV2, m)
                     rep["source"] = "generated" + (" (own materials)" if multi else "")
@@ -330,11 +617,11 @@ def main():
     # through the bulb) is hollow
     thin = set()
     for ph, _ in comps:
-        if ph not in z.files:
+        if ph not in z:
             continue
         a = z[ph][0]
         for q, _ in comps:
-            if q != ph and q in z.files and z[q][0].sum() < a.sum() and (a & z[q][0]).sum() > ENVELOPE_SHARE * z[q][0].sum():
+            if q != ph and q in z and z[q][0].sum() < a.sum() and (a & z[q][0]).sum() > ENVELOPE_SHARE * z[q][0].sum():
                 thin.add(slug(ph)); report[slug(ph)]["envelope"] = True
     write_usd(out, parts, thin)
     (out / "components.json").write_text(json.dumps(report, indent=1))
