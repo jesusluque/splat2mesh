@@ -175,7 +175,11 @@ MAIN_COVER = 0.6           # the main part's mask covers less than this of what 
 
 
 def silhouette(ref: Path, shape):
-    img = np.asarray(Image.open(ref).convert("RGB").resize(shape[::-1])).astype(np.float32)
+    return silhouette_arr(np.asarray(Image.open(ref).convert("RGB").resize(shape[::-1])))
+
+
+def silhouette_arr(img):
+    img = np.asarray(img).astype(np.float32)
     bg = np.median(np.r_[img[:4].reshape(-1, 3), img[-4:].reshape(-1, 3), img[:, :4].reshape(-1, 3),
                          img[:, -4:].reshape(-1, 3)], 0)
     sil = ndi.binary_opening(np.abs(img - bg).max(-1) > 18, iterations=2)
@@ -225,6 +229,7 @@ def merge_and_complete(ref, comps, z):
     return comps, z
 
 
+INSIDE_MARGIN = 0.03
 ORBIT_N, ORBIT_E, ORBIT_SIZE = 16, 15.0, 768      # the cameras of materials.render_orbit
 
 
@@ -259,7 +264,8 @@ def fg_box(a, white_bg):
 
 def mask_to_view(mask, ref_img, frame_img):
     """The reference mask carried into the orbit frame that looks like the reference: foreground boxes matched."""
-    ry0, ry1, rx0, rx1 = fg_box(ref_img, True)
+    sil = silhouette_arr(np.asarray(ref_img)); ys, xs = np.nonzero(sil)   # photo backgrounds are not white
+    ry0, ry1, rx0, rx1 = ys.min(), ys.max(), xs.min(), xs.max()
     fy0, fy1, fx0, fx1 = fg_box(frame_img, True)
     my, mx = np.nonzero(mask)
     sy = (fy1 - fy0) / max(ry1 - ry0, 1); sx = (fx1 - fx0) / max(rx1 - rx0, 1)
@@ -333,7 +339,11 @@ def place_view(PV, PF, part_dir, part_img, V, F, mask, ref, whole):
         ev = o3d.pipelines.registration.evaluate_registration(src, dst, 0.1 * diag, T)
         # two-way: the part's points on the whole surface and the whole's mask points covered by the part
         back = o3d.pipelines.registration.evaluate_registration(dst, src.transform(T), 0.1 * diag, np.eye(4))
-        score = ev.fitness * back.fitness + (0.01 if vp == vlike else 0)
+        # the part lies inside the whole object's volume (with a margin): a rotation that sticks out is wrong
+        W = (np.c_[PV[::7], np.ones(len(PV[::7]))] @ T.T)[:, :3]
+        lo_, hi_ = V.min(0), V.max(0); mg = INSIDE_MARGIN * np.linalg.norm(hi_ - lo_)
+        inside = np.all((W > lo_ - mg) & (W < hi_ + mg), 1).mean()
+        score = ev.fitness * back.fitness * inside ** 4 + (0.01 if vp == vlike else 0)
         if best is None or score > best[0]:
             best = (score, T, ev.fitness * back.fitness, ev.inlier_rmse, vp)
     if best is None:
