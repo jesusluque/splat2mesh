@@ -18,10 +18,12 @@ ACCEPT = 3
 S = 384
 PROMPT = ("Image 0 (top left) is a reference photo of a whole object. Image 1 is the part '{part}' cut out of that "
           "photo. Images 2..{n} are candidate pictures of that part generated to be turned into a 3D model of the part "
-          "by itself. Score each candidate 1-5: 5 = shows only '{part}', alone and complete (hidden sides completed "
-          "plausibly), with the same shape, proportions, colour and material as in the reference photo; lower if it "
-          "contains other parts of the object (inside it, behind it or attached), if it changes the shape or "
-          "proportions, if it is cropped or if it adds things. Answer JSON: {{\"scores\": {{\"2\": s, ...}}, \"best\": "
+          "by itself, so it must be the WHOLE part, recomposed where the photo hid it. Score each candidate 1-5. First "
+          "criterion, completeness: if any area is cut, flattened, missing or straight-edged where something covered "
+          "the part in the photo (like the cut-out in image 1), the score is at most 2, however faithful the rest. "
+          "Then: 5 = shows only '{part}', alone and complete, with the same shape, proportions, colour and material as "
+          "in the reference photo; lower if it contains other parts of the object (inside it, behind it or attached), "
+          "if it changes the shape or proportions, or if it adds things. Answer JSON: {{\"scores\": {{\"2\": s, ...}}, \"best\": "
           "index, \"why\": short reason}}")
 
 

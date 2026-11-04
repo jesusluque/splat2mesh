@@ -1,5 +1,5 @@
 """Per-component reconstruction with no hand-written part list: deepseek-flash looks at the reference picture and
-names the object's separate physical components and the library material of each, then components.py makes
+writes its bill of materials (each kind of part, how many, its library material, turned or not), then components.py makes
 each one (ENEAS mask → Iris clean picture chosen by deepseek → Idol → placed by its mask) and assembles them.
 
     python scripts/auto_components.py REF.png WHOLE_ASSET_DIR OUT_DIR
@@ -14,13 +14,17 @@ sys.path.insert(0, str(Path.home() / ".claude/skills/research-deepseek/scripts")
 import dsr
 
 MAX_PARTS = 8
-PROMPT = ("This photo shows one object. List its separate physical components that a 3D artist would model as "
-          "separate meshes: parts that are visibly distinct pieces (different material, or a piece mounted on another), "
-          "each large enough to be seen clearly (not tiny details or decals). At most {n}, biggest first. For each give a "
-          "short English noun phrase starting with 'the' that a segmentation model can find in the photo (e.g. 'the "
-          "front wheel'), and its material, chosen ONLY from this list: {mats}. Also say if the part is a body of revolution (round all "
-          "around one axis, like a wheel, a tyre, a bottle, a cup or a bulb). Answer JSON: {{\"parts\": [{{\"phrase\": "
-          "..., \"material\": ..., \"revolution\": true|false}}]}}")
+PROMPT = ("This photo shows one object. Write its bill of materials (BOM) for a 3D artist who models each kind of "
+          "separate physical part once: parts that are visibly distinct pieces (different material, or a piece mounted "
+          "on another), each large enough to be seen clearly (not tiny details or decals). One line per KIND of part, "
+          "biggest first, at most {n} lines; the first line is the main body the rest is mounted on. For each: 'phrase', "
+          "a short English noun phrase starting with 'the' that a segmentation model can find in the photo (plural for "
+          "a repeated part, e.g. 'the wheels', so that all its visible copies are found); 'count', how many IDENTICAL copies "
+          "the whole object has, counting the ones hidden on the far side (a car has 4 identical wheels); parts that "
+          "differ in shape (a windscreen and a side window) are not copies: count 1, or separate lines; 'material', chosen ONLY from this "
+          "list: {mats}; 'revolution', true if the part is a body of revolution (round all around one axis, like a "
+          "wheel, a tyre, a bottle, a cup or a bulb). Answer JSON: {{\"bom\": [{{\"phrase\": ..., \"count\": n, "
+          "\"material\": ..., \"revolution\": true|false}}]}}")
 
 
 def list_parts(ref: Path):
@@ -35,11 +39,12 @@ def list_parts(ref: Path):
                                  headers={"Content-Type": "application/json", "Authorization": "Bearer " + dsr.key()})
     j = json.loads(json.load(urllib.request.urlopen(req, timeout=300))["choices"][0]["message"]["content"])
     parts, seen = [], set()
-    for p in j.get("parts", [])[:MAX_PARTS]:
+    for p in (j.get("bom") or j.get("parts") or [])[:MAX_PARTS]:
         ph, m = str(p.get("phrase", "")).strip().lower(), str(p.get("material", "")).strip().lower()
         if not ph or ph in seen or m not in mats:
             continue
-        seen.add(ph); parts.append((ph if ph.startswith("the ") else "the " + ph, m + ("@rev" if p.get("revolution") is True else "")))
+        seen.add(ph); parts.append((ph if ph.startswith("the ") else "the " + ph, m + ("@rev" if p.get("revolution") is True else "")
+                      + (f"#{int(p['count'])}" if str(p.get("count", 1)).isdigit() and int(p["count"]) > 1 else "")))
     return parts
 
 

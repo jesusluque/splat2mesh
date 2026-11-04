@@ -19,4 +19,4 @@ for i, (f, l) in enumerate(zip(fs, labs)):
     if chosen and str(f).endswith(Path(chosen).name):
         d.rectangle([i * S + 2, 26, i * S + S - 3, S + 21], outline=(0, 170, 0), width=6); l += "  ELEGIDA"
     d.text((i * S + 6, 6), l, fill="black")
-p = out / "sheets" / f"{slug}.jpg"; im.save(p, quality=88); print(p)
+(out / "sheets").mkdir(exist_ok=True); p = out / "sheets" / f"{slug}.jpg"; im.save(p, quality=88); print(p)

@@ -68,6 +68,8 @@ def idol(image: Path, work: Path, gaussians: int) -> Path:
     ply = work / f"{image.stem}.ply"
     sh(["scp", "-q", f"{IXWIN}:{IX_DIR}/{image.stem}.ply", str(ply)])
     sh(["scp", "-q", f"{IXWIN}:{IX_DIR}/{image.stem}_input.png", str(work / "idol_input.png")])
+    # Idol's estimate of the input camera (yaw/pitch around the object): places parts generated from one picture
+    subprocess.run(["scp", "-q", f"{IXWIN}:{IX_DIR}/{image.stem}_camera.json", str(work / "idol_camera.json")])
     return ply
 
 

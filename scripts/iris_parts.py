@@ -56,7 +56,8 @@ T = cfg.flow.num_train_timesteps
 pred = cfg.flow.prediction
 
 
-def run(cond, mask, x, sigmas, neg=None, w=0.0):
+def run(cond, mask, x, sigmas, neg=None, w=0.0, hole=None, x0=None, noise=None):
+    """hole (1 = redraw): inpainting — outside it the picture is put back, noised to each step's level."""
     sigma = torch.full((1, 1, 1, 1), sigmas[0], device=dev)
     for i in range(len(sigmas)):
         with torch.autocast(dev.type, dtype=torch.bfloat16):
@@ -69,6 +70,10 @@ def run(cond, mask, x, sigmas, neg=None, w=0.0):
             implied = (x - (1 - sigma) * clean) / sigma
             sigma = torch.full_like(sigma, sigmas[i + 1])
             x = (1 - sigma) * clean + sigma * implied
+            if hole is not None:
+                x = hole * x + (1 - hole) * ((1 - sigma) * x0 + sigma * noise)
+    if hole is not None:
+        clean = hole * clean + (1 - hole) * x0
     return clean.clamp(-1, 1)
 
 
@@ -106,6 +111,16 @@ with torch.no_grad():
             neg = (ce, me)
         img = np.asarray(Image.open(src).convert("RGB").resize((1024, 1024), Image.LANCZOS), np.float32) / 127.5 - 1
         x0 = torch.from_numpy(img).permute(2, 0, 1)[None].to(dev)
+        hp = Path(src[:-4] + "_hole.png")
+        hole = None
+        if hp.exists():          # recomposition: only the hidden part of the part is drawn
+            hm = np.asarray(Image.open(hp).convert("L").resize((1024, 1024)), np.float32) / 255
+            # only the empty (white) part of the extent is redrawn: the seen part is kept to its edge
+            from scipy import ndimage as ndi_
+            empty = ndi_.binary_erosion(img.min(-1) > 0.92, iterations=3)
+            hm = ndi_.gaussian_filter((hm > 0.5) & empty, 2).astype(np.float32)
+            if hm.mean() > 0.01:
+                hole = torch.from_numpy(hm)[None, None].to(dev)
         e = te.encode([PROMPT.format(part=phrase.strip(), material=material.strip())])
         cond, m = e.embeddings.to(device=dev, dtype=torch.bfloat16), e.mask.to(device=dev)
         slug = re.sub(r"[^a-z0-9]+", "_", re.sub(r"^the\s+", "", phrase.strip().lower())).strip("_")
@@ -127,8 +142,11 @@ with torch.no_grad():
             g = torch.Generator(device=dev).manual_seed(a.seed)
             noise = torch.randn(1, model.cfg.in_channels, 1024, 1024, generator=g, device=dev)
             x = (1 - SIG[k]) * x0 + SIG[k] * noise
+            if hole is not None and s > 0.9:
+                k = 0                                  # the strongest level redraws the hole from pure noise
+                x = noise.clone()
             for w in (a.neg_scale if neg is not None else [0.0]):
-                res = run(cond, m, x.clone(), SIG[k:], neg, w)
+                res = run(cond, m, x.clone(), SIG[k:], neg, w, hole, x0, noise)
                 p = out / (f"{slug}_s{SIG[k]:g}" + (f"_n{w:g}" if neg is not None else "") + ".png")
                 save_image(res.float(), p, normalize=True, value_range=(-1, 1))
                 print(p, f"{time.time() - t0:.0f}s", flush=True)

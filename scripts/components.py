@@ -52,20 +52,62 @@ def eneas_on_reference(ref: Path, phrases, out_npz: Path):
     subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(out_npz)], check=True)
 
 
-def cut_out(ref: Path, mask: np.ndarray, out_png: Path):
-    """The component on white, square, with a margin (Idol's own matting takes it from there)."""
+def cut_out(ref: Path, mask: np.ndarray, out_png: Path, region=None):
+    """The component on white, square, with a margin (Idol's own matting takes it from there). region: the part's
+    whole extent where the photo hid some of it; the frame holds it all and <out>_hole.png marks region minus the
+    visible part (what the recomposition redraws)."""
     img = np.asarray(Image.open(ref).convert("RGB")).copy()
+    rs = lambda a: np.asarray(Image.fromarray(a.astype(np.uint8) * 255).resize(img.shape[1::-1])) > 127
     if mask.shape != img.shape[:2]:
-        mask = np.asarray(Image.fromarray(mask.astype(np.uint8) * 255).resize(img.shape[1::-1])) > 127
-    from scipy import ndimage as ndi
+        mask = rs(mask)
+    if region is not None and region.shape != img.shape[:2]:
+        region = rs(region)
     m = ndi.binary_dilation(mask, iterations=2)
     img[~m] = 255
-    ys, xs = np.nonzero(m)
+    fm = m | region if region is not None else m
+    ys, xs = np.nonzero(fm)
     cy, cx = (ys.min() + ys.max()) / 2, (xs.min() + xs.max()) / 2
     h = max(np.ptp(ys), np.ptp(xs)) * (1 + 2 * PAD) / 2
-    canvas = Image.new("RGB", (int(2 * h), int(2 * h)), (255, 255, 255))
-    canvas.paste(Image.fromarray(img), (int(h - cx), int(h - cy)))
-    canvas.resize((1024, 1024), Image.LANCZOS).save(out_png)
+    def frame(a, mode, fill):
+        canvas = Image.new(mode, (int(2 * h), int(2 * h)), fill)
+        canvas.paste(Image.fromarray(a), (int(h - cx), int(h - cy)))
+        return canvas.resize((1024, 1024), Image.LANCZOS)
+    frame(img, "RGB", (255, 255, 255)).save(out_png)
+    if region is not None:
+        hole = ndi.binary_dilation(region & ~ndi.binary_dilation(mask, iterations=2), iterations=3)
+        frame((hole * 255).astype(np.uint8), "L", 0).save(Path(str(out_png)[:-4] + "_hole.png"))
+
+
+RECOMPOSE_GAP = 6          # px: mask border this close to another part is an occlusion edge, not the part's outline
+
+
+def recompose_region(mask, others, revolution):
+    """The part's whole extent in the picture where something covered it: a turned part is an ellipse fitted to its
+    real outline (border pixels not touching another part); any other part, the convex hull of what is seen."""
+    from skimage.measure import EllipseModel
+    from skimage.morphology import convex_hull_image
+    hull = convex_hull_image(mask)
+    if not revolution:
+        return hull
+    border = mask & ~ndi.binary_erosion(mask)
+    occl = ndi.binary_dilation(others, iterations=RECOMPOSE_GAP) if others is not None else np.zeros_like(mask)
+    ys, xs = np.nonzero(border & ~occl)
+    if len(xs) < 20:
+        return hull
+    em = EllipseModel()
+    try:
+        ok = em.estimate(np.c_[xs, ys].astype(float))
+    except Exception:                    # degenerate point sets (complex roots in the fit)
+        ok = False
+    if not ok:
+        return hull
+    xc, yc, a, b, th = em.params
+    if max(a, b) > 3 * max(np.ptp(np.nonzero(mask)[0]), np.ptp(np.nonzero(mask)[1])):
+        return hull                      # degenerate fit (a nearly straight outline)
+    Y, X = np.mgrid[0:mask.shape[0], 0:mask.shape[1]]
+    ct, st_ = np.cos(th), np.sin(th)
+    u = ((X - xc) * ct + (Y - yc) * st_) / a; v = (-(X - xc) * st_ + (Y - yc) * ct) / b
+    return (u * u + v * v <= 1) | mask
 
 
 def face_labels(asset: Path):
@@ -116,7 +158,7 @@ REVOLUTION = set()
 LATHE_H, LATHE_T, LATHE_SEG = 64, 72, 128
 
 
-def lathe(V, F, UV, tex, tex_out):
+def lathe(V, F, UV, tex, tex_out, with_axis=False):
     """A body of revolution is round all the way, also where the picture hid it (a wheel behind the body): the
     generated mesh becomes a turned surface. Axis: the principal direction whose spread differs from the other two.
     Profile r(h): per height band, the median over angle sectors of the outermost radius (hidden or invented sectors
@@ -166,6 +208,8 @@ def lathe(V, F, UV, tex, tex_out):
     suv = UV[nn] if len(UV) == len(V) else np.zeros((len(nn), 2))
     px = np.clip((suv[:, 0] * S_).astype(int), 0, S_ - 1); py = np.clip(((1 - suv[:, 1]) * S_).astype(int), 0, S_ - 1)
     Image.fromarray(src[py, px].reshape(R, R, 3)).save(tex_out)
+    if with_axis:
+        return P, Fn, uvn, tex_out, (c, ax)
     return P, Fn, uvn, tex_out
 
 
@@ -233,19 +277,20 @@ INSIDE_MARGIN = 0.03
 ORBIT_N, ORBIT_E, ORBIT_SIZE = 16, 15.0, 768      # the cameras of materials.render_orbit
 
 
-def orbit_cam(V, i):
+def orbit_cam(V, i, az=None, el=None):
     lo, hi = V.min(0), V.max(0); c = (lo + hi) / 2; rad = np.linalg.norm(hi - lo) / 2
     f = ORBIT_SIZE / 2 / np.tan(np.radians(15)); dist = rad / np.sin(np.radians(15)) * 1.1
-    a, e = 2 * np.pi * i / ORBIT_N, np.radians(ORBIT_E)
+    a = 2 * np.pi * i / ORBIT_N if az is None else az
+    e = np.radians(ORBIT_E) if el is None else el
     eye = c + dist * np.array([np.sin(a) * np.cos(e), np.sin(e), np.cos(a) * np.cos(e)])
     fw = c - eye; fw /= np.linalg.norm(fw); rt = np.cross(fw, [0, 1, 0]); rt /= np.linalg.norm(rt); dn = np.cross(fw, rt)
     return eye, np.stack([rt, dn, fw]), f
 
 
-def view_hits(V, F, i):
-    """Per pixel of orbit view i: the 3D surface point hit (NaN where the ray misses)."""
+def view_hits(V, F, i, az=None, el=None):
+    """Per pixel of orbit view i (or of the camera at azimuth az, elevation el): the 3D surface point hit."""
     import open3d as o3d
-    eye, M, f = orbit_cam(V, i)
+    eye, M, f = orbit_cam(V, i, az, el)
     u, v = np.meshgrid(np.arange(ORBIT_SIZE) + .5, np.arange(ORBIT_SIZE) + .5)
     d = np.stack([(u - ORBIT_SIZE / 2) / f, (v - ORBIT_SIZE / 2) / f, np.ones_like(u)], -1) @ M
     sc = o3d.t.geometry.RaycastingScene(); sc.add_triangles(V.astype(np.float32), F.astype(np.uint32))
@@ -290,6 +335,17 @@ def best_view(orbit_dir, image):
     return int(np.argmax(sc))
 
 
+IDOL_STEP, IDOL_SPAN = np.radians(7.5), np.radians(30)
+
+
+def idol_view(cam_json):
+    """Idol's predicted input camera (yaw, pitch in its splat frame) as azimuth/elevation of our USD orbit:
+    direction (dx, dy, dz) → USD (dx, dz, -dy)."""
+    c = json.loads(Path(cam_json).read_text()); y, p_ = c["yaw"], c["pitch"]
+    dx, dy, dz = np.cos(p_) * np.sin(y), np.cos(p_) * np.cos(y), np.sin(p_)
+    return float(np.arctan2(dx, -dy)), float(np.arcsin(dz))
+
+
 def place_view(PV, PF, part_dir, part_img, V, F, mask, ref, whole):
     """Similarity transform of a generated part into the whole object, through the views: the reference picture is
     the whole's orbit view that looks most like it; the part's picture is the part's orbit view that looks most like
@@ -316,12 +372,19 @@ def place_view(PV, PF, part_dir, part_img, V, F, mask, ref, whole):
     vlike = best_view(po, part_img)
     # every orbit view of the part is a candidate rotation (the picture-likeness of thin parts is ambiguous): the
     # one whose visible points fit the whole's surface under the mask best wins; ties go to the most alike view
-    for vp in range(ORBIT_N):
-        Pp = view_hits(PV, PF, vp).reshape(-1, 3); Pp = Pp[np.isfinite(Pp).all(1)]
+    camf = part_dir.parent / "idol_camera.json"
+    if camf.exists():
+        # Idol says from where the part's picture was seen: only rotations around that camera are tried
+        az0, el0 = idol_view(camf)
+        cands = [(None, az0 + k * IDOL_STEP, el0) for k in range(-int(IDOL_SPAN / IDOL_STEP), int(IDOL_SPAN / IDOL_STEP) + 1)]
+    else:
+        cands = [(vp, None, None) for vp in range(ORBIT_N)]
+    for vp, az, el in cands:
+        Pp = view_hits(PV, PF, vp or 0, az, el).reshape(-1, 3); Pp = Pp[np.isfinite(Pp).all(1)]
         if len(Pw) < 100 or len(Pp) < 100:
             continue
         Pp = Pp[np.random.default_rng(0).permutation(len(Pp))[:20000]]
-        _, Mp, _ = orbit_cam(PV, vp)
+        _, Mp, _ = orbit_cam(PV, vp or 0, az, el)
         R = Mw.T @ Mp
         cp = (Pp @ R.T) @ Mw.T
         ep = np.percentile(cp[:, :2], 98, 0) - np.percentile(cp[:, :2], 2, 0)
@@ -345,11 +408,71 @@ def place_view(PV, PF, part_dir, part_img, V, F, mask, ref, whole):
         inside = np.all((W > lo_ - mg) & (W < hi_ + mg), 1).mean()
         score = ev.fitness * back.fitness * inside ** 4 + (0.01 if vp == vlike else 0)
         if best is None or score > best[0]:
-            best = (score, T, ev.fitness * back.fitness, ev.inlier_rmse, vp)
+            best = (score, T, ev.fitness * back.fitness, ev.inlier_rmse, vp if az is None else round(float(np.degrees(az)), 1))
     if best is None:
         return None
     _, T, fit, rmse, vp = best
-    return T, float(fit), float(rmse) / max(diag, 1e-9), {"whole_view": int(vw), "part_view": int(vp)}
+    return T, float(fit), float(rmse) / max(diag, 1e-9), {"whole_view": int(vw), "part_view": vp}
+
+
+COUNT = {}
+INSTANCE_MIN = 0.15        # a separate blob of a repeated part's mask is an instance if ≥ this of the largest
+
+
+def instance_masks(m):
+    """The visible instances of a repeated part: separate blobs of its (plural) mask, largest first."""
+    lab_, n = ndi.label(ndi.binary_opening(m, iterations=2))
+    if n == 0:
+        return [m]
+    areas = ndi.sum(np.ones_like(lab_), lab_, range(1, n + 1))
+    order = np.argsort(-areas)
+    return [lab_ == (i + 1) for i in order if areas[i] >= INSTANCE_MIN * areas[order[0]]]
+
+
+def symmetry_plane(V):
+    """The object's mirror plane: of the three axis planes through the box centre, the one that maps the surface
+    onto itself best (mean nearest distance after mirroring, relative to the size); None if none is a mirror."""
+    from scipy.spatial import cKDTree
+    c = (V.min(0) + V.max(0)) / 2; size = np.linalg.norm(np.ptp(V, 0))
+    sub = V[np.random.default_rng(0).permutation(len(V))[:30000]]
+    tree = cKDTree(sub); best = None
+    for k in range(3):
+        W = sub.copy(); W[:, k] = 2 * c[k] - W[:, k]
+        d = float(np.mean(tree.query(W)[0])) / size
+        if best is None or d < best[0]:
+            best = (d, k)
+    return (best[1], c[best[1]]) if best[0] < SYM_MAX else None
+
+
+SYM_MAX = 0.02
+
+
+def complete_instances(Ts, count, V, LV, axis):
+    """Up to count copies: the missing ones are mirror images of the placed ones through the object's symmetry
+    plane, skipped when they land on a copy already there. A turned part is mirrored as a proper rotation (its own
+    reflection through a plane holding its axis), so no copy is inside out."""
+    sp = symmetry_plane(V)
+    if sp is None or len(Ts) >= count:
+        return Ts[:count], 0
+    k, c0 = sp
+    Mw = np.eye(4); Mw[k, k] = -1; Mw[k, 3] = 2 * c0
+    Ml = np.eye(4)
+    if axis is not None:
+        cc, ax = axis
+        n = np.cross(ax, [1, 0, 0] if abs(ax[0]) < 0.9 else [0, 1, 0]); n /= np.linalg.norm(n)
+        Hh = np.eye(3) - 2 * np.outer(n, n)                  # reflection through a plane holding the axis
+        Ml[:3, :3] = Hh; Ml[:3, 3] = cc - Hh @ cc
+    size = np.linalg.norm(np.ptp(LV, 0))
+    centre = lambda T: (T @ np.r_[LV.mean(0), 1])[:3]
+    out, added = list(Ts), 0
+    for T in Ts:
+        if len(out) >= count:
+            break
+        Tm = Mw @ T @ Ml
+        sc = np.cbrt(abs(np.linalg.det(T[:3, :3])))
+        if all(np.linalg.norm(centre(Tm) - centre(U)) > 0.5 * size * sc for U in out):
+            out.append(Tm); added += 1
+    return out, added
 
 
 def ref_box(ref: Path, mask: np.ndarray, V: np.ndarray):
@@ -437,10 +560,11 @@ def close_contacts(parts, geo, report):
             shift[b] = shift[b] + mv
             report[b]["contact_shift"] = round(float(-(gap + CONTACT_OVERLAP * size) / size), 4)
     outp = []
-    for name, cls, V, F, uv, tex in parts:
+    for e in parts:
+        name, cls, V, F, uv, tex = e[:6]
         t = shift.get(name)
-        if t is None or not t.any():
-            outp.append((name, cls, V, F, uv, tex)); continue
+        if len(e) > 6 or t is None or not t.any():      # instanced parts keep their own placements
+            outp.append(e); continue
         if cls is None:                       # referenced component: V is its 4x4 transform
             T = V.copy(); T[:3, 3] += t; outp.append((name, cls, T, F, uv, tex))
         else:
@@ -454,8 +578,17 @@ def write_usd(out: Path, parts, thin=()):
     st = Usd.Stage.CreateNew(str(out / "asset.usda"))
     UsdGeom.SetStageUpAxis(st, UsdGeom.Tokens.y); UsdGeom.SetStageMetersPerUnit(st, 1.0)
     root = UsdGeom.Xform.Define(st, "/Asset"); st.SetDefaultPrim(root.GetPrim())
-    for name, cls, V, F, uv, tex in parts:
+    copies = []
+    for e in parts:
+        name, cls, V, F, uv, tex = e[:6]
         xf = f"/Asset/Components/{name}"
+        if len(e) > 6:
+            # a repeated part: the first copy holds the mesh (in the prototype's own frame) and its placement; the
+            # others reference it with their own placement
+            Ts = e[6]; xf = f"/Asset/Components/{name}_1"
+            x0 = UsdGeom.Xform.Define(st, xf)
+            x0.AddTransformOp().Set(Gf.Matrix4d(np.asarray(Ts[0]).T.tolist()))
+            copies.append((name, xf, Ts, any(np.linalg.det(np.asarray(T)[:3, :3]) < 0 for T in Ts)))
         if cls is None:                    # own material stage: reference its asset, placed by the ICP transform
             T, src = V, F
             x = UsdGeom.Xform.Define(st, xf)
@@ -521,6 +654,14 @@ def write_usd(out: Path, parts, thin=()):
             ss.CreateInput("thin_walled", Sdf.ValueTypeNames.Bool).Set(True)
         mat.CreateSurfaceOutput("mtlx").ConnectToSource(ss.ConnectableAPI(), "out")
         UsdShade.MaterialBindingAPI.Apply(m.GetPrim()).Bind(mat)
+    for name, src, Ts, mirrored in copies:
+        if mirrored:          # mirror copies turn the winding inside out: both sides are surface
+            UsdGeom.Mesh(st.GetPrimAtPath(src + "/Geom")).GetDoubleSidedAttr().Set(True)
+        for i, T in enumerate(Ts[1:], 2):
+            x = UsdGeom.Xform.Define(st, f"/Asset/Components/{name}_{i}")
+            x.GetPrim().GetReferences().AddInternalReference(src)
+            x.ClearXformOpOrder()
+            x.AddTransformOp().Set(Gf.Matrix4d(np.asarray(T).T.tolist()))
     st.GetRootLayer().Save()
 
 
@@ -531,8 +672,12 @@ def main():
     comps = []
     for a in sys.argv[4:]:
         ph, mats = a.split("=", 1)
-        if mats.strip().endswith("@rev"):          # a body of revolution (wheel, bottle, cup): turned, see lathe()
-            REVOLUTION.add(slug(ph.strip())); mats = mats.strip()[:-4]
+        mats = mats.strip()
+        mc = re.search(r"#(\d+)", mats)
+        if mc:                                     # how many of this part the object has (a BOM line)
+            COUNT[slug(ph.strip())] = int(mc.group(1)); mats = (mats[:mc.start()] + mats[mc.end():]).strip()
+        if mats.endswith("@rev"):                  # a body of revolution (wheel, bottle, cup): turned, see lathe()
+            REVOLUTION.add(slug(ph.strip())); mats = mats[:-4].strip()
         comps.append((ph.strip(), mats.strip()))
     items_c = [(m.split(":")[0].strip() if ":" in m else m, ph) for ph, m in comps]
     # 1. components on the reference picture
@@ -558,11 +703,24 @@ def main():
         tgt_faces = np.nonzero(np.isin(lab, ks))[0] if ks else np.array([], int)
         rep = {"material": cls, "mask_share": round(share, 4), "whole_faces": int(len(tgt_faces))}
         placed = False
+        insts = instance_masks(m) if (m is not None and COUNT.get(name, 1) > 1) else ([m] if m is not None else [])
+        if len(insts) > 1:
+            rep["visible_instances"] = len(insts)
+            m = insts[0]                                     # the most visible one is generated, the rest are copies
+            share = float(m.mean())
         if m is not None and share >= MIN_MASK:              # its place comes from the picture mask
             img = out / "parts" / f"{name}.png"; img.parent.mkdir(exist_ok=True)
             if not img.exists():
                 cut = out / "parts" / f"{name}_cut.png"
-                cut_out(ref, MAIN_PICTURE.get(name, m), cut)
+                if name in MAIN_PICTURE:
+                    cut_out(ref, MAIN_PICTURE[name], cut)
+                else:
+                    # the part is recomposed where the photo hid it (Iris redraws the hole, keeps what was seen)
+                    others = np.zeros_like(m)
+                    for q in z:
+                        if q != ph:
+                            others |= z[q][0] if not (z[q][0] & m).sum() > 0.5 * m.sum() else False
+                    cut_out(ref, m, cut, recompose_region(m, others, name in REVOLUTION))
                 chosen = iris_picture(ref, ph, cls, cut, [p for p, _ in comps if p != ph], out) if USE_IRIS else None
                 Image.open(chosen or cut).save(img)
                 rep["picture"] = "iris " + Path(chosen).stem if chosen else "cut-out"
@@ -609,10 +767,30 @@ def main():
                             trimesh.smoothing.filter_taubin(tm, iterations=GLASS_SMOOTH_ITERS)
                             PV2 = np.asarray(tm.vertices)[inv]
                         tex = usd_dir / "basecolor.png"
-                        if name in REVOLUTION:
-                            PV2, PF, PUV, tex = lathe(PV2, PF, PUV, tex, out / "parts" / f"{name}_lathe.png")
-                            rep["revolution"] = True
-                        parts.append((name, cls, PV2, PF, PUV, tex))
+                        if COUNT.get(name, 1) > 1:
+                            # one prototype in its own frame, copies placed by each visible instance's mask and the
+                            # missing ones mirrored through the object's symmetry plane
+                            LV, LF, LUV, ltex, axis = PV, PF, PUV, tex, None
+                            if name in REVOLUTION:
+                                LV, LF, LUV, ltex, axis = lathe(PV, PF, PUV, tex, out / "parts" / f"{name}_lathe.png", True)
+                                rep["revolution"] = True
+                            Ts = [T]
+                            for im_ in insts[1:]:
+                                try:
+                                    r_ = place_view(PV, PF, usd_dir, img, V, F, im_, ref, whole)
+                                except Exception as e:
+                                    r_ = None; print("instance placement failed", name, e, flush=True)
+                                if r_ is not None and r_[1] > 0.3:
+                                    Ts.append(r_[0])
+                            Ts, mirrored = complete_instances(Ts, COUNT[name], V, LV, axis)
+                            rep.update(instances=len(Ts), mirrored=mirrored)
+                            parts.append((name, cls, LV, LF, LUV, ltex, Ts))
+                            PV2 = (np.c_[LV, np.ones(len(LV))] @ T.T)[:, :3]
+                        else:
+                            if name in REVOLUTION:
+                                PV2, PF, PUV, tex = lathe(PV2, PF, PUV, tex, out / "parts" / f"{name}_lathe.png")
+                                rep["revolution"] = True
+                            parts.append((name, cls, PV2, PF, PUV, tex))
                     placed = True
                     geo[name] = (PV2, m)
                     rep["source"] = "generated" + (" (own materials)" if multi else "")
