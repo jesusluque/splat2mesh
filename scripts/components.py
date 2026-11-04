@@ -159,6 +159,8 @@ def close_contacts(parts, geo, report):
             ma, mb = geo[a][1], geo[b][1]
             if not (ndi.binary_dilation(ma, iterations=CONTACT_DILATE) & mb).any():
                 continue
+            if (ma & mb).sum() > ENVELOPE_SHARE * min(ma.sum(), mb.sum()):
+                continue                      # one seen through the other (inside it), not side by side
             ca = np.argwhere(ma).mean(0); cb = np.argwhere(mb).mean(0)
             d = np.array([cb[1] - ca[1], ca[0] - cb[0], 0.0]); d /= max(np.linalg.norm(d), 1e-9)   # a → b
             pa = (geo[a][0] + shift[a]) @ d; pb = (geo[b][0] + shift[b]) @ d
@@ -276,7 +278,7 @@ def main():
         tgt_faces = np.nonzero(np.isin(lab, ks))[0] if ks else np.array([], int)
         rep = {"material": cls, "mask_share": round(share, 4), "whole_faces": int(len(tgt_faces))}
         placed = False
-        if m is not None and share >= MIN_MASK and len(tgt_faces) >= 50:
+        if m is not None and share >= MIN_MASK:              # its place comes from the picture mask
             img = out / "parts" / f"{name}.png"; img.parent.mkdir(exist_ok=True)
             if not img.exists():
                 cut_out(ref, m, img)
