@@ -54,6 +54,12 @@ METAL_DETAIL_SIGMA = 8.0      # texels: metal albedo keeps luminance detail fine
 METAL_DETAIL_MIN = 0.75       # ...and may darken by at most this factor (deeper darks are reflections)
 GLASS_SMOOTH_ITERS = 120      # Taubin iterations on glass/crystal/jade/wax vertices
 GLASS_WALL_MIN = 0.08         # glass thicker than this × object size is really a hollow wall (bulb, bowl, bottle)
+GLOSS_EVIDENCE_MAX_ROUGH = 0.45  # materials whose range reaches this low may be polished; the texture decides
+GLOSS_EVIDENCE_FRAC = 0.03       # share of pale-highlight texels that marks a polished finish
+BILATERAL_ITERS = 60           # glossy shading normals: bilateral face-normal passes
+BILATERAL_SIGMA = 0.3          # 1 - cos below which neighbours average (≈ 45°: edges above it stay)
+WHITE_PATCH_MIN = 0.002        # white patch (share of the atlas) a coloured metal gives to an unfound non-metal
+SEEN_LIGHT_MAX = 0.03         # share of light texels on the seen side above which light behind is kept
 GLOSS_UNIFORM_SPREAD = 10.0   # Lab a*b* spread below which a glossy dielectric piece is one colour (paint, lacquer)
 GLASS_WALL_TINT = 0.35        # share of the glass tint applied per wall a ray crosses
 _RASTER = {}
@@ -453,6 +459,29 @@ def from_view_masks(spec_json, orbit_dir, masks: dict) -> dict:
             for j, r in enumerate(spec["regions"]):
                 if r["lab"][0] < 20:
                     cls_tex[mask & (reg == j) & seen_in] = i; print(f"colour prior: region {j} → {cls} (dark)")
+    # a coloured metal (gold, brass, copper) is never white: white, colourless regions it took on the seen side go
+    # to a described opaque non-metal part that found no texels (the enamel dial of a gold watch)
+    unfound = [i for i, n in enumerate(names) if not (cls_tex == i).any()
+               and _lib(n.split("|")[0]).get("metallic", 0) < 0.5 and _lib(n.split("|")[0]).get("transmission", 0) <= 0
+               and not any((cls_tex == k).any() for k, m in enumerate(names) if m.split("|")[0] == n.split("|")[0])]
+    if unfound:
+        tgt = unfound[0]
+        for i, n in enumerate(names):
+            L = _lib(n.split("|")[0])
+            if L.get("metallic", 0) < 0.5 or not L.get("f0") or np.ptp(L["f0"]) < 0.08:
+                continue
+            for j, r in enumerate(spec["regions"]):
+                if r["lab"][0] > 70 and np.hypot(r["lab"][1], r["lab"][2]) < 12:
+                    # colour alone decides here (a gold piece cannot be white on any side); only large patches,
+                    # so pale glints of a frozen reflection on the metal stay metal
+                    sel = mask & (reg == j) & (cls_tex == i)
+                    lab_, nl = ndi.label(sel)
+                    if nl:
+                        sz = np.bincount(lab_.ravel()); sz[0] = 0
+                        sel = sz[lab_] > WHITE_PATCH_MIN * mask.sum()
+                    if sel.any():
+                        cls_tex[sel] = tgt
+                        print(f"colour prior: white region {j} is not {n.split('|')[0]} → {names[tgt].split('|')[0]}")
     # a secondary transparent part may not swallow the object (watch "crystal" over the dial): above 25 % its
     # texels go back to the best-voted opaque part
     first_cls = names[0].split("|")[0] if names else None
@@ -783,7 +812,11 @@ def fix_invented_side(asset_dir, cls_tex, names, seen_view: int, ratio: float = 
         bad = cls_mask & ~seen & (lab[..., 0] < ratio * Lref)
         # a one-colour piece (rubber, paint) invented much LIGHTER behind is brought down the same way
         abr = lab[..., 1:][ref]
-        if np.median(np.hypot(*(abr - np.median(abr, 0)).T)) < GLOSS_UNIFORM_SPREAD and Lref < 70:
+        # unless the seen side itself shows that lightness (an inlay, a panel, a label): then light texels behind
+        # are the same features continuing (nacre panels of a black box), not an invented lighter colour
+        seen_light = float((lab[..., 0][ref] > Lref / ratio).mean())
+        if (np.median(np.hypot(*(abr - np.median(abr, 0)).T)) < GLOSS_UNIFORM_SPREAD and Lref < 70
+                and seen_light < SEEN_LIGHT_MAX):
             bad |= cls_mask & ~seen & (lab[..., 0] > Lref / ratio)
         if bad.sum() == 0:
             continue
@@ -861,6 +894,24 @@ def smooth_glass(asset_dir, cls_tex, names, iterations: int = GLASS_SMOOTH_ITERS
     return True
 
 
+def _bilateral_normals(V, F, iters: int, sigma: float):
+    """Edge-preserving smoothing of face normals (bilateral over edge-adjacent faces), then area-weighted
+    vertex normals. Positions are not touched."""
+    import trimesh, scipy.sparse as sp
+    tm = trimesh.Trimesh(V, F, process=False)
+    n = tm.face_normals.copy(); a = tm.area_faces
+    adj = tm.face_adjacency
+    i = np.r_[adj[:, 0], adj[:, 1]]; j = np.r_[adj[:, 1], adj[:, 0]]
+    for _ in range(iters):
+        w = np.exp(-((1 - (n[i] * n[j]).sum(1)) / sigma) ** 2) * a[j]
+        m = sp.csr_matrix((w, (i, j)), shape=(len(F), len(F))) @ n + a[:, None] * n
+        n = m / np.maximum(np.linalg.norm(m, axis=1, keepdims=True), 1e-12)
+    vn = np.zeros_like(V)
+    for k in range(3):
+        np.add.at(vn, F[:, k], n * a[:, None])
+    return vn / np.maximum(np.linalg.norm(vn, axis=1, keepdims=True), 1e-12)
+
+
 def smooth_shading_normals(asset_dir, cls_tex, names) -> int:
     """Reflections expose every small bump of the fused surface. Keep the positions (silhouette, detail) and write
     vertex normals taken from a Taubin-smoothed copy of the mesh, so glossy porcelain, lacquer and polished metal
@@ -869,17 +920,15 @@ def smooth_shading_normals(asset_dir, cls_tex, names) -> int:
     import trimesh
     asset = Path(asset_dir)
     _, mask = _texture_and_mask(asset)
-    gl = np.zeros(mask.shape, bool)
-    for i, n in enumerate(names):
-        if _lib(n.split("|")[0]).get("roughness", 0.5) < 0.3:
-            gl |= cls_tex == i
-    glossy = (gl & mask).sum() / max(mask.sum(), 1)
-    mi = np.zeros(mask.shape, bool)                      # mirror-like (chrome, polished silver): every bump shows
-    for i, n in enumerate(names):
-        if _lib(n.split("|")[0]).get("roughness", 0.5) < 0.2:
-            mi |= cls_tex == i
-    mirror = (mi & mask).sum() / max(mask.sum(), 1)
-    it = 100 if mirror > 0.5 else 40 if glossy > 0.5 else 20
+    # glossiness from the finished roughness map (it includes finishes decided from the texture, e.g. polish)
+    Rm = np.asarray(Image.open(asset / "roughness.png"), np.float32)[::-1] / 255
+    if Rm.ndim == 3:
+        Rm = Rm[..., 0]
+    if Rm.shape != mask.shape:
+        Rm = np.asarray(Image.fromarray((Rm * 255).astype(np.uint8)).resize(mask.shape[::-1]), np.float32) / 255
+    glossy = ((Rm < 0.32) & mask).sum() / max(mask.sum(), 1)
+    mirror = ((Rm < 0.2) & mask).sum() / max(mask.sum(), 1)
+    it = 40 if glossy > 0.5 else 20
     st = Usd.Stage.Open(str(asset / "asset.usda"))
     m = UsdGeom.Mesh(st.GetPrimAtPath("/Asset/Geom"))
     V = np.asarray(m.GetPointsAttr().Get(), np.float64)
@@ -887,9 +936,16 @@ def smooth_shading_normals(asset_dir, cls_tex, names) -> int:
     key = np.round(V / (np.ptp(V, 0).max() * 1e-6)).astype(np.int64)
     _, uid, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
     inv = inv.reshape(-1)
-    tm = trimesh.Trimesh(V[uid], inv[F], process=False)
-    trimesh.smoothing.filter_taubin(tm, lamb=0.5, nu=0.53, iterations=it)
-    nrm = np.asarray(tm.vertex_normals)[inv]
+    if glossy > 0.5 or mirror > 0.5:
+        # glossy: bilateral filtering of the face normals. Ripples and terracing of the fused surface (a few
+        # degrees) are averaged away over a wide area while edges and corners (tens of degrees) stay sharp;
+        # Taubin on the positions either leaves the ripples or rounds the corners
+        nrm = _bilateral_normals(V[uid], inv[F], BILATERAL_ITERS, BILATERAL_SIGMA)[inv]
+        it = BILATERAL_ITERS
+    else:
+        tm = trimesh.Trimesh(V[uid], inv[F], process=False)
+        trimesh.smoothing.filter_taubin(tm, lamb=0.5, nu=0.53, iterations=it)
+        nrm = np.asarray(tm.vertex_normals)[inv]
     m.GetNormalsAttr().Set(Vt.Vec3fArray.FromNumpy(nrm.astype(np.float32)))
     m.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
     st.GetRootLayer().Save()
@@ -938,7 +994,22 @@ def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
             detail = np.exp(0.9 * hp_cache["hp"][sel])
             detail = np.clip(detail, METAL_DETAIL_MIN, 1.0 / f0.max())
             base[sel] = srgb(f0[None] * detail[:, None])
-        if (L.get("metallic", 0) < 0.5 and L.get("transmission", 0) <= 0 and L.get("roughness", 0.5) <= 0.4
+        glossy_ev = False
+        if (L.get("metallic", 0) < 0.5 and L.get("transmission", 0) <= 0 and L.get("roughness", 0.5) > 0.4
+                and L.get("range", [1])[0] <= GLOSS_EVIDENCE_MAX_ROUGH and sel.sum() > 2000):
+            # a material that can be either satin or polished (leather, varnished wood, satin paint): the texture
+            # decides. Frozen specular highlights (paler and brighter than the piece's own colour, on a single-colour
+            # piece) are evidence of a polished finish → the low end of its roughness range, highlights removed below
+            lab_s = _srgb_to_lab(base[sel])
+            ab0 = np.median(lab_s[:, 1:], 0); L0 = np.median(lab_s[:, 0]); c0 = float(np.hypot(*ab0))
+            spread = float(np.median(np.hypot(*(lab_s[:, 1:] - ab0).T)))
+            frac = float(((np.hypot(lab_s[:, 1], lab_s[:, 2]) < 0.8 * c0) & (lab_s[:, 0] > L0 + 12)).mean())
+            if c0 > 15 and spread < GLOSS_UNIFORM_SPREAD and frac > GLOSS_EVIDENCE_FRAC:
+                glossy_ev = True
+                r_lo = max(0.25, float(L["range"][0]) - 0.1)     # polished: below the range's satin end
+                Rmap[sel] = np.minimum(Rmap[sel], r_lo)
+                print(f"polish {cls}: {frac:.1%} highlight texels → roughness {r_lo}")
+        if (L.get("metallic", 0) < 0.5 and L.get("transmission", 0) <= 0 and (L.get("roughness", 0.5) <= 0.4 or glossy_ev)
                 and sel.sum() > 2000):
             # glossy single-colour dielectric (paint, lacquer, plastic): a frozen reflection mixes the colour with
             # white — paler and brighter than the piece's own colour. Uniform pieces only (patterned porcelain

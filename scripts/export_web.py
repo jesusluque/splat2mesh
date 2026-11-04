@@ -46,6 +46,29 @@ def _decimate_web(stage, keep: float):
                 stage.RemovePrim(sub.GetPath())
 
 
+def _quantize_web(stage):
+    """Web copy only: round the ASCII geometry to what is visible. Normals to 3 decimals (< 0.1°), UVs to
+    1/20000 (a third of a texel at 6144²), points to 1e-5 of the object size. No vertex moves, so no seam opens."""
+    import numpy as np
+    from pxr import UsdGeom, Vt
+    rng = UsdGeom.BBoxCache(0, ["default", "render"]).ComputeWorldBound(stage.GetPseudoRoot()).ComputeAlignedRange()
+    size = max((rng.GetMax() - rng.GetMin()).GetLength(), 1e-9)
+    q = 10 ** np.floor(np.log10(size * 1e-5))
+    for prim in stage.Traverse():
+        if prim.GetTypeName() != "Mesh":
+            continue
+        m = UsdGeom.Mesh(prim)
+        V = m.GetPointsAttr().Get()
+        if V:
+            m.GetPointsAttr().Set(Vt.Vec3fArray.FromNumpy((np.round(np.asarray(V) / q) * q).astype(np.float32)))
+        N = m.GetNormalsAttr().Get()
+        if N:
+            m.GetNormalsAttr().Set(Vt.Vec3fArray.FromNumpy(np.round(np.asarray(N), 3).astype(np.float32)))
+        pv = UsdGeom.PrimvarsAPI(m).GetPrimvar("st")
+        if pv and pv.Get():
+            pv.Set(Vt.Vec2fArray.FromNumpy((np.round(np.asarray(pv.Get()) * 20000) / 20000).astype(np.float32)))
+
+
 def make_usdz(src: Path, dst: Path, usd_name: str = "asset.usda") -> dict:
     """Copy asset.usda + textures into a temp dir, rewrite texture paths to bare file names, package as USDZ."""
     tmp = Path(tempfile.mkdtemp())
@@ -121,7 +144,15 @@ def make_usdz(src: Path, dst: Path, usd_name: str = "asset.usda") -> dict:
         for f in tmp.glob("basecolor*.png"):
             im = Image.open(f); im.resize((2048, 2048), Image.LANCZOS).save(f, optimize=True)
         dst.unlink(); UsdUtils.CreateNewUsdzPackage(str(tmp / "asset.usda"), str(dst))
-    if dst.stat().st_size > 20_000_000:                   # still too big: the geometry (ASCII) — decimate the copy
+    if dst.stat().st_size > 20_000_000:                   # still too big: quantise the ASCII geometry (lossless to the eye)
+        _quantize_web(st)
+        st.GetRootLayer().Save()
+        usda_f.write_text(re.sub(r"-?\d+\.\d{7,}(?:e-?\d+)?", lambda m: f"{float(m.group(0)):.6g}", usda_f.read_text()))
+        st.GetRootLayer().Reload(force=True)
+        info["web_quantized"] = True
+        dst.unlink(); UsdUtils.CreateNewUsdzPackage(str(tmp / "asset.usda"), str(dst))
+    print(f"{dst.name}: {dst.stat().st_size/1e6:.1f} MB after quantising", file=sys.stderr)
+    if dst.stat().st_size > 23_500_000:                   # last resort: decimate the copy (may tear at UV seams)
         keep = max(0.2, 0.85 * 18_000_000 / dst.stat().st_size)
         _decimate_web(st, keep)
         st.GetRootLayer().Save()

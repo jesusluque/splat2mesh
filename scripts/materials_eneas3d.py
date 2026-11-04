@@ -34,9 +34,12 @@ items = [(c, t.replace("'", "").replace('"', '').strip()) for c, t in parse_desc
 # a transparent material is also searched by its own name ("the glass"): the description may not list every pane
 # (a car's rear window), and the glass-openings step (splat2mesh/openings.py) uses the union of all glass masks
 from splat2mesh.materials import _lib as _libm
+SAME_MASK_IOU = 0.9       # two phrases of different materials with masks this alike: ENEAS did not separate them
+GENERIC_MAX_COVER = 0.3   # the material-name phrase is for missed panes, not for most of the object
+auto_items = []
 for c in sorted({c for c, _ in items if _libm(c).get("transmission", 0) > 0}):
     if f"the {c}" not in [t for _, t in items]:
-        items.append((c, f"the {c}"))
+        items.append((c, f"the {c}")); auto_items.append((c, f"the {c}"))
 tag = asset.resolve().as_posix().replace("/", "_")[-60:]
 if LINUX:
     win = f"splat2mesh_eneas/jobs/{tag}"; wsl = f"$HOME/{win}"
@@ -103,6 +106,37 @@ for k in list(masks):
     if cover > (0.15 if thin else 0.75):
         print("dropped (covers", round(float(cover), 2), "of the object):", k)
         masks[k] = np.zeros_like(masks[k])      # keep the material in the list so colour priors can still claim it
+# ENEAS could not tell two phrases of different materials apart (near-identical masks: "the case" and "the
+# crystal" of a watch): the description lists the main parts first, so the later one is dropped (colour priors
+# can still claim its class)
+order = [f"{c}|{t}" for c, t in items]
+nz = [k for k in order if k in masks and masks[k].any()]
+for ia, a_ in enumerate(nz):
+    for b_ in nz[ia + 1:]:
+        if a_.split("|")[0] == b_.split("|")[0] or not masks[b_].any() or not masks[a_].any():
+            continue
+        iou = (masks[a_] & masks[b_]).sum() / max((masks[a_] | masks[b_]).sum(), 1)
+        if iou > SAME_MASK_IOU:
+            print(f"dropped (same mask as {a_}, IoU {iou:.2f}):", b_)
+            masks[b_] = np.zeros_like(masks[b_])
+# the material's own name ("the glass") only looks for panes the description did not list: it fills what no
+# described part claims, and is dropped when it spreads over much of the object (a reflection-wide guess)
+for c, t in auto_items:
+    k = f"{c}|{t}"
+    if k not in masks:
+        continue
+    others = np.zeros_like(masks[k])
+    for o in masks:
+        if o != k:
+            others |= masks[o]
+    cover = (masks[k] & obj).sum() / max(obj.sum(), 1)
+    if cover > GENERIC_MAX_COVER:
+        print(f"dropped (generic phrase covers {cover:.2f} of the object):", k)
+        masks[k] = np.zeros_like(masks[k])
+    else:
+        masks[k] = masks[k] & ~others
+# the masks as decided here (after the drops) are what later steps (glass openings) must use, not the raw ones
+np.savez_compressed(asset / "mat" / "masks_used.npz", **{k.split("|", 1)[1]: v for k, v in masks.items()})
 print("annotation frame", ann, "| phrases", list(masks))
 if not masks:          # ENEAS found nothing: whole object = the description's main material
     import json as _j

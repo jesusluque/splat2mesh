@@ -169,17 +169,22 @@ def glass_openings(asset_dir, names, share: dict, min_found: float = 0.01, min_g
     if not glass_parts or sum(share.get(n, 0) for n in glass_parts) > min_found:
         cache.unlink(missing_ok=True)
         return out
-    if cache.exists() and cache.stat().st_mtime > (asset / "mat" / "masks.npz").stat().st_mtime:
+    mfile = asset / "mat" / "masks_used.npz"                    # the masks after the segmentation checks
+    if not mfile.exists():
+        mfile = asset / "mat" / "masks.npz"
+    if cache.exists() and cache.stat().st_mtime > mfile.stat().st_mtime:
         add_to_usd(asset / "asset.usda", asset)                  # same masks, same mesh: reuse the panes
         out["cached"] = True
         return out
     cache.unlink(missing_ok=True)
-    z = np.load(asset / "mat" / "masks.npz")
+    z = np.load(mfile)
     keys = [n.split("|", 1)[1] if "|" in n else n for n in glass_parts]
     keys = [k for k in keys if k in z.files]
     if not keys:
         return out
     masks = np.any(np.stack([z[k] for k in keys]), 0)
+    if not masks.any():                                          # every glass phrase was dropped: no panes
+        return out
     from .rerender import load_usd_textured
     V, F, _, _ = load_usd_textured(str(asset / "asset.usda"))
     caps = envelope_caps(V, F)

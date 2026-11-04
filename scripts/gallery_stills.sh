@@ -3,7 +3,7 @@
 cd "$(dirname "$0")/.."
 B=$HOME/luc/athenea-ptaux/build/macos-arm64-release
 mkdir -p out/stills
-for a in out/mat_cat3/asset.usda out/testset_v5/0*/usd/asset.usda out/testset2_v5/0*/usd/asset.usda out/testset3_v5/0*/usd/asset.usda out/testset4_v5/0*/usd/asset.usda; do
+for a in ${STILL_ONLY:-out/mat_cat3/asset.usda out/testset_v5/0*/usd/asset.usda out/testset2_v5/0*/usd/asset.usda out/testset3_v5/0*/usd/asset.usda out/testset4_v5/0*/usd/asset.usda}; do
   name=$(echo $a | sed 's#out/##; s#/usd/asset.usda##; s#/asset.usda##; s#/#_#g')
   [ -f out/stills/$name.png ] && continue
   read CX CY CZ R < <(.venv/bin/python -c "
