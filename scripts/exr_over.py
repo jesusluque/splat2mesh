@@ -22,4 +22,7 @@ a = ndi.gaussian_filter(obj.astype(np.float32), 0.7)[..., None]
 srgb = lambda c: np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(np.clip(c, 0, None), 1 / 2.4) - 0.055)
 out = srgb(np.clip(rgb, 0, 1)) * a + grey * (1 - a)
 Image.fromarray((np.clip(out, 0, 1) * 255).round().astype(np.uint8)).save(dst)
+import os
+if os.environ.get("OVER_MASK"):                    # the object mask itself (overlay.py: exact model silhouette)
+    Image.fromarray(obj.astype(np.uint8) * 255).save(os.environ["OVER_MASK"])
 print(dst, "object px", int(obj.sum()))
