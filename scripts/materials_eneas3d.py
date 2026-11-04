@@ -77,7 +77,7 @@ if not reuse or run_items:
    inner = f"~/.local/bin/uv run python {wsl}/eneas_seq.py {wsl}/frames {wsl}/masks.npz {ann},{ann2} {q}"
    cmd = (f"cd ~/splat2mesh_eneas/eneas && {inner}" if LINUX
           else f'wsl -d Ubuntu-24.04 -- bash -lc "cd ~/splat2mesh/eneas && {inner}"')
-   print(subprocess.run(["ssh", HOST, cmd], capture_output=True, text=True).stdout.replace("\x00", "")[-1500:])
+   print(subprocess.run(["ssh", HOST, cmd], capture_output=True, text=True, timeout=5400).stdout.replace("\x00", "")[-1500:])
    if reuse:                 # merge the new phrases into the saved masks
        subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(asset / "mat" / "masks_new.npz")], check=True)
        merged = {**dict(np.load(asset / "mat" / "masks.npz")), **dict(np.load(asset / "mat" / "masks_new.npz"))}

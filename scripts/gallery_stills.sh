@@ -11,6 +11,10 @@ from pxr import Usd, UsdGeom
 s=Usd.Stage.Open('$a'); b=UsdGeom.BBoxCache(0,['default','render']).ComputeWorldBound(s.GetPseudoRoot()).ComputeAlignedRange()
 c=(b.GetMin()+b.GetMax())/2; r=(b.GetMax()-b.GetMin()).GetLength()/2; print(c[0],c[1],c[2],r)" 2>/dev/null)
   read EX EY EZ < <(python3 -c "print($CX+$R*1.3, $CY+$R*0.9, $CZ+$R*3.3)")
-  bash ~/luc/athenea-gpu/shared.sh bash -c "export ATHENEA_SHADER_DIR=$B/shaders; timeout 300 $B/bin/athenea stage '$a' --eye $EX $EY $EZ --target $CX $CY $CZ --up 0 1 0 --focal 50 --size 640x640 --default-lights --technique rt --path-bounces 12 --path-total 48 --denoise -o /tmp/still_\$\$.exr > /dev/null 2>&1 && oiiotool /tmp/still_\$\$.exr --ch R,G,B --colorconvert linear sRGB -d uint8 -o out/stills/$name.png; rm -f /tmp/still_\$\$.exr" < /dev/null
+  # lit by the studio HDRI (polished metals need something to reflect), composited on grey by depth
+  W=$(mktemp -d); A=$(cd "$(dirname $a)" && pwd)/$(basename $a)
+  printf '#usda 1.0\n(\n defaultPrim = "World"\n upAxis = "Y"\n)\ndef Xform "World"\n{\n def "Asset" (prepend references = @%s@) {}\n def DomeLight "Env"\n {\n  asset inputs:texture:file = @%s@\n  float inputs:intensity = 1.0\n }\n}\n' "$A" "$PWD/out/hdri/${STILL_HDRI:-brown_photostudio_02}.hdr" > $W/still.usda
+  bash ~/luc/athenea-gpu/shared.sh bash -c "export ATHENEA_SHADER_DIR=$B/shaders; timeout 300 $B/bin/athenea stage '$W/still.usda' --eye $EX $EY $EZ --target $CX $CY $CZ --up 0 1 0 --focal 50 --size 640x640 --technique rt --path-bounces 12 --path-total 64 --denoise -o $W/still.exr > /dev/null 2>&1" < /dev/null
+  .venv/bin/python scripts/exr_over.py $W/still.exr out/stills/$name.png > /dev/null; rm -rf $W
 done
 echo "$(date +%H:%M) stills done" >> out/night_progress.log

@@ -604,7 +604,11 @@ def glass_walls(asset_dir, cls_tex, names, min_thickness: float = GLASS_WALL_MIN
                 Sdf.CopySpec(st.GetRootLayer(), mat_prim.GetPath(), st.GetRootLayer(), thin_path)
                 for p in Usd.PrimRange(st.GetPrimAtPath(thin_path)):     # CopySpec already remaps internal paths
                     if p.GetName() == "StandardSurface":
-                        UsdShade.Shader(p).CreateInput("thin_walled", Sdf.ValueTypeNames.Bool).Set(True)
+                        ssh = UsdShade.Shader(p)
+                        ssh.CreateInput("thin_walled", Sdf.ValueTypeNames.Bool).Set(True)
+                        # a thin-walled sheet is already two interfaces; the wall's inner and outer surfaces are
+                        # both sheets here, so each carries half the reflectance (one real wall = two interfaces)
+                        ssh.CreateInput("specular", Sdf.ValueTypeNames.Float).Set(0.5)
                 sub = UsdGeom.Subset.Define(st, geom.GetPath().AppendChild("glass_walls"))
                 sub.CreateElementTypeAttr(UsdGeom.Tokens.face)
                 sub.CreateIndicesAttr(Vt.IntArray.FromNumpy(wall.astype(np.int32)))

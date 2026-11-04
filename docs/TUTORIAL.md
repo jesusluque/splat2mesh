@@ -14,8 +14,9 @@ text ──Iris-3B──▶ image ──Idol──▶ 3D Gaussian splat ──sp
 
 <img src="img/gallery.jpg" width="100%">
 
-*32 test objects generated overnight — porcelain, metals, wood, lacquer, stone, jade, wax, glass, leather and
-mixes — every material assigned by the pipeline, no manual step. Path traced with athenea.*
+*33 test objects — porcelain, metals, wood, lacquer, stone, jade, wax, glass, leather and mixes — every material
+assigned by the pipeline, no manual step. Path traced with athenea under a studio HDRI (polished metals need
+something to reflect), composited on grey.*
 
 The step-by-step basics (direct mode, the UV map, the render path) are in [TUTORIAL_basics.md](TUTORIAL_basics.md).
 
