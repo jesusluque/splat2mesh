@@ -61,7 +61,9 @@ BILATERAL_SIGMA = 0.3          # 1 - cos below which neighbours average (â‰ˆ 45Â
 WHITE_PATCH_MIN = 0.002        # white patch (share of the atlas) a coloured metal gives to an unfound non-metal
 SEEN_LIGHT_MAX = 0.03         # share of light texels on the seen side above which light behind is kept
 GLOSS_UNIFORM_SPREAD = 10.0   # Lab a*b* spread below which a glossy dielectric piece is one colour (paint, lacquer)
-GLASS_WALL_TINT = 0.35        # share of the glass tint applied per wall a ray crosses
+GLASS_WALL_TINT = 0.35        # share of the glass tint applied per wall a ray crosses (older rule, unused)
+GLASS_WALLS = 2               # walls a ray crosses through a glass shell: per-wall colour = tint ** (1 / walls), so
+                              # the colour seen through the piece is the tint measured on it
 _RASTER = {}
 
 
@@ -326,7 +328,7 @@ def render_orbit(asset_dir, out_dir, n: int = 16, elevation: float = 15.0, size:
     return out_dir
 
 
-def refine_by_regions(tex, mask, votes, spec, classes, min_share: float = 0.25, pos=None):
+def refine_by_regions(tex, mask, votes, spec, classes, min_share: float = 0.25, pos=None, home_share: float = 0.4):
     """Material borders follow colour borders. In each colour region only the material classes holding at least
     min_share of that region's votes are allowed; each texel takes the allowed part with most votes at that
     texel (or the region's majority part when unseen). White texels cannot become gold because a phrase mask
@@ -335,6 +337,16 @@ def refine_by_regions(tex, mask, votes, spec, classes, min_share: float = 0.25, 
     C = np.array([r["lab"] for r in spec["regions"]])
     reg = ((_srgb_to_lab(tex)[..., None, :] - C[None, None]) ** 2).sum(-1).argmin(-1)
     out = np.full(mask.shape, -1)
+    # a class is also allowed in the region holding most of its own votes: a small part (horns) or one sharing its
+    # colour with a bigger one (lavender crystal next to lavender wings) is never a majority anywhere, but it lives
+    # somewhere
+    cls_names = sorted(set(classes))
+    home = {}
+    for c in cls_names:
+        ks = [k for k in range(K) if classes[k] == c]
+        per_reg = np.array([votes[ks][:, mask & (reg == j)].sum() for j in range(len(C))])
+        if per_reg.sum() > 0 and per_reg.max() >= home_share * per_reg.sum():
+            home[c] = int(per_reg.argmax())
     for j in range(len(C)):
         sel = mask & (reg == j)
         if not sel.any():
@@ -348,6 +360,7 @@ def refine_by_regions(tex, mask, votes, spec, classes, min_share: float = 0.25, 
             per_cls[classes[k]] = per_cls.get(classes[k], 0) + per_part[k]
         tot = sum(per_cls.values())
         allowed_cls = {c for c, w in per_cls.items() if w >= min_share * tot} or {max(per_cls, key=per_cls.get)}
+        allowed_cls |= {c for c, h in home.items() if h == j and per_cls.get(c, 0) > 0}
         allowed = np.array([classes[k] in allowed_cls for k in range(K)])
         vv = np.where(allowed[:, None], v, -1)
         lab_t = vv.argmax(0)
@@ -1052,11 +1065,11 @@ def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
     for name, img in (("transmission", T), ("subsurface", S)):
         Image.fromarray((img[::-1].clip(0, 1) * 255).astype(np.uint8)).save(asset / f"{name}.png")
     Image.fromarray(((1 - 0.85 * T)[::-1].clip(0, 1) * 255).astype(np.uint8)).save(asset / "opacity.png")
-    # transmission colour: the glass tint applies at every wall a ray crosses (two for a thin-walled shell), so the
-    # per-wall colour is the tint pulled most of the way to white; opaque texels stay white (no effect)
+    # transmission colour: the glass tint applies at every wall a ray crosses (two for a shell), so the per-wall
+    # colour is the measured tint's square root; opaque texels stay white (no effect)
     tc = np.ones(base.shape, np.float32)
     lb = lin(base)
-    tc = np.where((T > 0)[..., None], 1 - GLASS_WALL_TINT * (1 - lb), 1.0)[iy, ix]
+    tc = np.where((T > 0)[..., None], np.clip(lb, 1e-3, 1) ** (1 / GLASS_WALLS), 1.0)[iy, ix]
     Image.fromarray((srgb(np.clip(tc, 0, 1))[::-1] * 255).astype(np.uint8)).save(asset / "transmission_color.png")
     for name, img in (("roughness", Rmap), ("metallic", Mmap)):
         Image.fromarray((img[::-1].clip(0, 1) * 255).astype(np.uint8)).save(asset / f"{name}.png")

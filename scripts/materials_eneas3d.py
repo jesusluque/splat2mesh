@@ -101,8 +101,13 @@ if "--no-overlap" not in sys.argv and len(masks) > 1:
         sys.path.insert(0, str(ROOT / "scripts"))
         from gen_views import ds as _ds, img_url as _img_url
         _ask = lambda sheet, q: _ds([{"type": "image_url", "image_url": {"url": _img_url(sheet)}}, {"type": "text", "text": q}])
-        masks, _orep, _osheet = resolve(masks, frames, frames.index(next(f for f in frames if f.name == ann)), image,
-                                        {k: k.split("|", 1)[1] for k in masks}, _ask)
+        # the material-name phrases ("the crystal") are only for panes the description missed: they take part
+        # after the listed parts are settled (rule below), not in the vote, where they grab look-alike colours
+        _auto = {f"{c}|{t}" for c, t in auto_items}
+        _listed = {k: v for k, v in masks.items() if k not in _auto}
+        _res, _orep, _osheet = resolve(_listed, frames, frames.index(next(f for f in frames if f.name == ann)), image,
+                                       {k: k.split("|", 1)[1] for k in _listed}, _ask)
+        masks = {k: (_res[k] if k in _res else v) for k, v in masks.items()}
         print("overlap resolved:", _orep, flush=True)
         if _osheet is not None:
             _osheet.save(asset / "mat" / "overlap_clusters.jpg", quality=85)
