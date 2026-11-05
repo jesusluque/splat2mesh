@@ -2,7 +2,9 @@
 paths equal to the archive entry names) that the page shows with three.js' USDZLoader and that iOS opens in
 AR Quick Look; plus the source image.
 
-    python scripts/export_web.py OUTDIR NAME=ASSET_DIR[:TITLE[:SOURCE_IMAGE]] [...]
+    python scripts/export_web.py OUTDIR NAME=ASSET_DIR[:TITLE[:SOURCE_IMAGE[:POSTER]]] [...] [--materials texture|parts]
+--materials texture (default): one mesh, materials per texel (transmission, roughness, metalness maps); parts: one
+mesh prim per part with its own material (faces take their centre texel's part: jagged borders on small features).
 ASSET_DIR holds asset.usda + its textures (+ report.json in it or its parent).
 """
 import html, json, shutil, sys, tempfile
@@ -164,6 +166,9 @@ def make_usdz(src: Path, dst: Path, usd_name: str = "asset.usda") -> dict:
     return info
 
 
+MATERIALS = "texture"
+if "--materials" in sys.argv:
+    i = sys.argv.index("--materials"); MATERIALS = sys.argv[i + 1]; del sys.argv[i:i + 2]
 out = Path(sys.argv[1]); (out / "models").mkdir(parents=True, exist_ok=True)
 HDRS = [("Studio", "studio_small_09"), ("Photo studio", "brown_photostudio_02"), ("Sunset", "venice_sunset"),
         ("Sky", "kloofendal_48d_partly_cloudy_puresky")]           # CC0, polyhaven.com, 1k
@@ -179,10 +184,23 @@ for spec in sys.argv[2:]:
     src = Path(parts[0]); title = parts[1] if len(parts) > 1 and parts[1] else name
     img = Path(parts[2]) if len(parts) > 2 and parts[2] else None
     poster = Path(parts[3]) if len(parts) > 3 and parts[3] else None
-    use_parts = (src / "asset_parts.usda").exists() and (src / "parts.json").exists()
+    # materials per texture (default: one mesh, transmission/roughness/metalness maps per texel, borders follow the
+    # texture) or per part (--materials parts: one mesh prim per part, a face takes its centre texel's part)
+    use_parts = MATERIALS == "parts" and (src / "asset_parts.usda").exists() and (src / "parts.json").exists()
     info = make_usdz(src, out / "models" / f"{name}.usdz", "asset_parts.usda" if use_parts else "asset.usda")
     if use_parts:
         shutil.copy(src / "parts.json", out / "models" / f"{name}_parts.json")
+    use_maps = not use_parts and (src / "orm.png").exists()
+    if use_maps:
+        fin = json.loads((src / "mat" / "finish.json").read_text()) if (src / "mat" / "finish.json").exists() else {}
+        glass = [v for v in fin.values() if v.get("transmission", 0) > 0]
+        mp = {"orm": f"models/{name}_orm.png"}
+        Image.open(src / "orm.png").convert("RGB").resize((1024, 1024), Image.LANCZOS).save(out / "models" / f"{name}_orm.png", optimize=True)
+        if glass and (src / "transmission.png").exists():
+            Image.open(src / "transmission.png").convert("L").resize((1024, 1024), Image.LANCZOS).save(out / "models" / f"{name}_transmission.png", optimize=True)
+            mp.update(transmission=f"models/{name}_transmission.png", has_transmission=True,
+                      tint=next((v["tint"] for v in glass if v.get("tint")), None), ior=next((v["ior"] for v in glass if v.get("ior")), 1.5))
+        (out / "models" / f"{name}_maps.json").write_text(json.dumps(mp))
     if poster and poster.exists():
         Image.open(poster).convert("RGB").resize((640, 640), Image.LANCZOS).save(out / "models" / f"{name}_poster.jpg", quality=86)
     if img and img.exists():
@@ -194,6 +212,7 @@ for spec in sys.argv[2:]:
     rep["pbr"] = info["pbr"]
     rep["poster"] = bool(poster and poster.exists())
     rep["parts"] = use_parts
+    rep["maps"] = use_maps
     cards.append((name, title, bool(img and img.exists()), rep))
     print(name, "pbr" if info["pbr"] else "colour")
 
@@ -208,7 +227,7 @@ for name, title, has_img, rep in cards:
         stats += f" · PSNR {rep['psnr']:.1f} dB"
     src_img = f'<img class="src" src="models/{name}_input.jpg" alt="input image">' if has_img else ""
     items.append(f'''<article>
-  <div class="view" data-usdz="models/{name}.usdz" data-parts="{'models/' + name + '_parts.json' if rep.get('parts') else ''}" tabindex="0" role="button" aria-label="Load the 3D model of {html.escape(title)}">
+  <div class="view" data-usdz="models/{name}.usdz" data-parts="{'models/' + name + '_parts.json' if rep.get('parts') else ''}" data-maps="{'models/' + name + '_maps.json' if rep.get('maps') else ''}" tabindex="0" role="button" aria-label="Load the 3D model of {html.escape(title)}">
     {f'<img class="poster" src="models/{name}_poster.jpg" alt="{html.escape(title)}" loading="lazy">' if rep.get("poster") else ""}
     <span class="hint">Click to load 3D</span></div>
   <div class="meta">{src_img}<div><h2>{html.escape(title)}</h2><p>{stats}</p>
@@ -304,6 +323,25 @@ function view(el) {{
           attenuationColor: new THREE.Color(0.75, 0.9, 0.75), attenuationDistance: 0.3, sheen: 0.3, sheenRoughness: 0.6 }});
       }}
     }});
+    if (el.dataset.maps) {{   // per-texel materials on one mesh: transmission / roughness / metalness follow the texture
+      const mp = await fetch(el.dataset.maps).then(r => r.json()).catch(() => null);
+      if (mp) {{
+        const tl = new THREE.TextureLoader();
+        const ld = (u) => new Promise(res => u ? tl.load(u, t => res(t), undefined, () => res(null)) : res(null));
+        const [orm, tr] = await Promise.all([ld(mp.orm), ld(mp.transmission)]);
+        g.traverse(o => {{
+          if (!o.isMesh) return;
+          const m = o.material, fy = m.map ? m.map.flipY : false;
+          for (const t of [orm, tr]) if (t) {{ t.flipY = fy; t.colorSpace = THREE.NoColorSpace; t.needsUpdate = true; }}
+          const glass = !!(tr && mp.has_transmission);
+          const tint = mp.tint ? new THREE.Color().setRGB(mp.tint[0], mp.tint[1], mp.tint[2], THREE.LinearSRGBColorSpace) : new THREE.Color(1, 1, 1);
+          o.material = new THREE.MeshPhysicalMaterial({{ map: m.map, roughnessMap: orm, metalnessMap: orm, roughness: 1, metalness: 1,
+            transmissionMap: glass ? tr : null, transmission: glass ? 1 : 0, ior: mp.ior || 1.5, thickness: glass ? 0.04 : 0,
+            attenuationColor: tint, attenuationDistance: glass ? 0.25 : Infinity, side: glass ? THREE.DoubleSide : THREE.FrontSide,
+            specularIntensity: 1, envMapIntensity: 1.1 }});
+        }});
+      }}
+    }}
     msg.remove(); scene.add(g);
     const box = new THREE.Box3().setFromObject(g), c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3()).length();
     ctl.target.copy(c); cam.position.copy(c).add(new THREE.Vector3(0.35, 0.18, 1).normalize().multiplyScalar(s * 1.6));
