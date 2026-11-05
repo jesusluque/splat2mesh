@@ -32,6 +32,8 @@ ap.add_argument("--start-sigma", type=float, nargs="+", default=[0.833, 0.625])
 ap.add_argument("--seed", type=int, default=7)
 ap.add_argument("--neg-scale", type=float, nargs="+", default=[1.5],
                 help="guidance away from the negative prompt (the other components): o = pos + w (pos - neg)")
+ap.add_argument("--prompt", default=None, help="prompt template instead of PROMPT: {part}, {material}, {desc}")
+ap.add_argument("--desc", default="", help="text for {desc} in --prompt")
 ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cuda")
 ap.add_argument("--checkpoint", default=str(IRIS / "weights/turbo"))
 ap.add_argument("--steps", type=int, default=50, help="full model (no distill.yaml): Euler steps over the whole schedule")
@@ -121,7 +123,7 @@ with torch.no_grad():
             hm = ndi_.gaussian_filter((hm > 0.5) & empty, 2).astype(np.float32)
             if hm.mean() > 0.01:
                 hole = torch.from_numpy(hm)[None, None].to(dev)
-        e = te.encode([PROMPT.format(part=phrase.strip(), material=material.strip())])
+        e = te.encode([(a.prompt or PROMPT).format(part=phrase.strip(), material=material.strip(), desc=a.desc)])
         cond, m = e.embeddings.to(device=dev, dtype=torch.bfloat16), e.mask.to(device=dev)
         slug = re.sub(r"[^a-z0-9]+", "_", re.sub(r"^the\s+", "", phrase.strip().lower())).strip("_")
         if FULL:

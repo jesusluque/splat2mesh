@@ -11,6 +11,11 @@ INPUT can be:
 Steps per input: [Idol on ixwin] → cameras framing the splat → athenea `render --splats` (one shared.sh job)
 → TSDF + visual hull → clean, decimate, cap → xatlas UV → robust multi-view bake → USD → QA
 (mesh stats + re-render PSNR + compare.png) → report.json; a summary table for the batch at the end.
+
+Several views (like Tripo's "Multiview to 3D"):
+  --views LEFT BACK RIGHT   more photos of the one input object; Idol is sampled from all of them (idol_mv.py)
+  --multiview gen           one photo: the hidden sides are rendered from the first splat, cleaned by Iris, checked
+                            (outline kept, deepseek-flash sees the same object) and given back to Idol (gen_views.py)
 """
 from __future__ import annotations
 
@@ -24,7 +29,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 IMG = {".png", ".jpg", ".jpeg", ".webp"}
 PY = sys.executable
@@ -90,8 +95,26 @@ def process(inp: Path, out_root: Path, a) -> dict:
                 rep["upscaled"] = True
                 ply = idol(up, work, a.gaussians)
                 (work / f"{up.stem}.ply").rename(work / f"{inp.stem}.ply"); ply = work / f"{inp.stem}.ply"
+            elif a.views:              # several real photos of the object: Idol from all of them (idol_mv.py)
+                from gen_views import run_mv
+                mode = "real" if inp.suffix.lower() in {".jpg", ".jpeg"} else "synthetic"
+                from gen_views import SIDES
+                offs = list(SIDES.values())[:len(a.views)]          # in the order left, back, right
+                ply = run_mv(inp, [Path(v) for v in a.views], {}, work, a.gaussians, mode, yaw_offsets=offs)
+                shutil.copy(work / f"{inp.stem}_mv_input.png", work / "idol_input.png")
+                shutil.copy(work / f"{inp.stem}_mv_camera.json", work / "idol_camera.json")
+                rep["views"] = {"photos": a.views}
             else:
                 ply = idol(inp, work, a.gaussians)
+            if a.multiview == "gen" and not a.views:   # hidden sides generated (Iris) and given back to Idol
+                sh([PY, str(ROOT / "scripts/gen_views.py"), str(inp), str(ply), str(work / "idol_camera.json"),
+                    str(work), "--gaussians", str(a.gaussians)])
+                g = json.loads((work / "gen_views.json").read_text())
+                rep["views"] = {"generated": g.get("kept", []), "gates": g.get("views"), "desc": g.get("desc")}
+                mv = work / f"{inp.stem}_mv.ply"
+                if mv.exists():
+                    ply = mv
+                    shutil.copy(work / f"{inp.stem}_mv_camera.json", work / "idol_camera.json")
             y_down = not a.y_up            # Idol writes Y-down (COLMAP-style)
             antialias = False
             rep["t_idol_s"] = round(time.time() - t0, 1)
@@ -170,6 +193,10 @@ def main():
     ap.add_argument("--gaussians", type=int, default=262144)
     ap.add_argument("--upscale", action="store_true",
                     help="pass the object crop through the Iris-3B restorer before Idol (Mac, ~4 min)")
+    ap.add_argument("--views", nargs="+", default=None,
+                    help="more photos of the same (single) input object, e.g. left back right: Idol uses them all")
+    ap.add_argument("--multiview", choices=["off", "gen"], default="off",
+                    help="gen: the hidden sides are generated from the one photo (Iris) and given back to Idol")
     ap.add_argument("--y-down", action="store_true", help=".ply input is Y-down (COLMAP/Idol)")
     ap.add_argument("--y-up", action="store_true", help="override: Idol output already Y-up")
     ap.add_argument("--no-antialias", action="store_true", help="plain 3DGS .ply trained without Mip-Splatting")
