@@ -93,6 +93,21 @@ def _fit(m, n):            # ENEAS may return fewer frames than sent: pad with e
         return m[:n]
     return np.concatenate([m, np.zeros((n - m.shape[0],) + m.shape[1:], bool)])
 masks = {f"{cls}|{ph}": _fit(z[ph], len(frames)) for cls, ph in items if ph in z.files}
+# overlapping masks (a phrase grounded on too much: "the body" = the whole figurine, "the crystal" = dragon and
+# crystal): resolved per pixel by reliable specific masks, then colour clusters named by DeepSeek (splat2mesh/overlap)
+if "--no-overlap" not in sys.argv and len(masks) > 1:
+    try:
+        from splat2mesh.overlap import resolve
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from gen_views import ds as _ds, img_url as _img_url
+        _ask = lambda sheet, q: _ds([{"type": "image_url", "image_url": {"url": _img_url(sheet)}}, {"type": "text", "text": q}])
+        masks, _orep, _osheet = resolve(masks, frames, frames.index(next(f for f in frames if f.name == ann)), image,
+                                        {k: k.split("|", 1)[1] for k in masks}, _ask)
+        print("overlap resolved:", _orep, flush=True)
+        if _osheet is not None:
+            _osheet.save(asset / "mat" / "overlap_clusters.jpg", quality=85)
+    except Exception as e:                     # DeepSeek down etc.: keep ENEAS masks and the drop rules below
+        print("overlap resolution skipped:", e, flush=True)
 # grounding sanity: a secondary part (not the first, main body) that covers most of the object is a mislocated
 # phrase ("the side inlay" → the whole box) — drop it
 obj = np.stack([np.asarray(Image.open(f).convert("L"), np.float32) < 250 for f in frames])
