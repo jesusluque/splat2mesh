@@ -3,6 +3,7 @@ then Idol again from the photo plus those views (scripts/idol_mv.py).
 
 1. The single-view splat (Idol) is rendered by athenea from Idol's own camera turned by +90, +180 and +270 degrees of
    yaw (same pitch): left, back, right. These renders are blurry where Idol guessed.
+   Their colours are set to the photo's (Lab mean and spread of the object's pixels): guessed sides come out pale.
 2. Iris-3B Turbo img2img (SDEdit) turns each render into a clean product photo of that side, prompted with the
    object's description (deepseek-flash, from the photo) and the side; outside the render's mask the picture is
    white.
@@ -32,8 +33,9 @@ IX_DIR = "C:/splat2mesh/mv"
 SIDES = {"left": -90.0, "back": -180.0, "right": -270.0}
 SIGMAS = ["0.625", "0.833"]
 SIL_MIN, SAME_MIN, VIEW_W = 0.9, 3, 0.5
-PROMPT = ("Studio product photo of {desc}, seen from its {part} side, the whole object centred, isolated on a plain "
-          "white background, soft even studio light, sharp focus")
+# the turned views are not 'left / back / right' of the object when the photo is three-quarter: no side is named
+PROMPT = ("Studio product photo of {desc}, the whole object centred, isolated on a plain white background, soft even "
+          "studio light, sharp focus")
 
 
 def ds(content):
@@ -64,9 +66,9 @@ def same_object(photo, cand, side):
         t = Image.open(p).convert("RGB"); t.thumbnail((S, S)); sheet.paste(t, (i * S + (S - t.width) // 2, (S - t.height) // 2))
     j = ds([{"type": "image_url", "image_url": {"url": img_url(sheet)}},
             {"type": "text", "text": f"Left: a photo of an object. Right: a picture meant to show THE SAME object seen from "
-                                     f"its {side} side. Score 1-5: 5 = clearly the same object (shape, proportions, "
-                                     f"materials, colours, parts) seen from the {side}; 3 = same object, small "
-                                     f"differences; 1 = another object, the wrong side, or broken. Answer JSON: "
+                                     f"another angle (turned {side} degrees around it). Score 1-5: 5 = clearly the same "
+                                     f"object (shape, proportions, materials, colours, parts) from another angle; 3 = "
+                                     f"same object, small differences; 1 = another object, or broken. Answer JSON: "
                                      f"{{\"score\": n, \"why\": short}}"}])
     return float(j.get("score", 0)), j.get("why")
 
@@ -98,8 +100,19 @@ def iou(a, b):
 
 
 def sil(im):
+    """Object on a pure white background (pale leather or porcelain is not background: only near 255)."""
     a = np.asarray(Image.open(im).convert("RGB"), np.float32)
-    return ndi.binary_fill_holes(ndi.binary_opening(a.min(-1) < 235, iterations=2))
+    return ndi.binary_fill_holes(ndi.binary_opening(a.min(-1) < 250, iterations=2))
+
+
+def match_colour(rgb, mask, ref, ref_mask):
+    """Mean and spread of each Lab channel of the object's pixels set to the photo's: a guessed side of the splat is
+    often washed out, and the hidden side is the same material as the seen one."""
+    from skimage import color
+    lab = color.rgb2lab(np.asarray(rgb, np.float32) / 255); rl = color.rgb2lab(np.asarray(ref, np.float32) / 255)
+    a, b = lab[mask], rl[ref_mask]
+    lab[mask] = (a - a.mean(0)) / np.maximum(a.std(0), 1e-3) * b.std(0) + b.mean(0)
+    return Image.fromarray((np.clip(color.lab2rgb(lab), 0, 1) * 255).round().astype(np.uint8))
 
 
 def main():
@@ -107,6 +120,7 @@ def main():
     ap.add_argument("photo"); ap.add_argument("ply"); ap.add_argument("camera"); ap.add_argument("work")
     ap.add_argument("--gaussians", type=int, default=262144)
     ap.add_argument("--mode", default=None)
+    ap.add_argument("--no-idol", action="store_true", help="stop after the views (Idol later, e.g. when the GPU is busy)")
     a = ap.parse_args()
     photo, work = Path(a.photo), Path(a.work); rd = work / "views_render"
     known = cameras(a.ply, a.camera, rd)
@@ -125,10 +139,14 @@ def main():
     # renders on white for Iris
     src = work / "views_src"; src.mkdir(parents=True, exist_ok=True)
     masks = {}
+    # the photo's object pixels, as Idol cut them out (black background)
+    ref = Image.open(inp if inp.exists() else photo).convert("RGB")
+    ref_m = ndi.binary_erosion(np.asarray(ref).max(-1) > 10, iterations=3)
     for side in SIDES:
         rgb = Image.open(rd / f"views/{side}.png").convert("RGB")
         m = np.asarray(Image.open(rd / f"views/{side}_mask.png").convert("L")) > 127
         masks[side] = m
+        rgb = match_colour(rgb, m, ref, ref_m)
         w = Image.new("RGB", rgb.size, "white"); w.paste(rgb, mask=Image.fromarray(m.astype(np.uint8) * 255))
         w.save(src / f"{side}.png")
     desc = describe(photo); rep["desc"] = desc; print("desc:", desc, flush=True)
@@ -146,7 +164,7 @@ def main():
             out = Image.new("RGB", im.size, "white"); out.paste(im, mask=Image.fromarray(m.astype(np.uint8) * 255))
             tmp = gen / f"{c.stem}_masked.png"; out.save(tmp)
             j = float(iou(sil(tmp), masks[side]))
-            sc, why = same_object(photo, tmp, side) if j >= SIL_MIN else (0.0, "silhouette changed")
+            sc, why = same_object(photo, tmp, f"{abs(SIDES[side]):g}") if j >= SIL_MIN else (0.0, "silhouette changed")
             rep["views"].setdefault(side, []).append({"file": c.name, "sil_iou": round(j, 3), "same": sc, "why": why})
             print(side, c.name, round(j, 3), sc, why, flush=True)
             if j >= SIL_MIN and sc >= SAME_MIN and (best is None or (sc, j) > best[:2]):
@@ -159,6 +177,8 @@ def main():
     (work / "gen_views.json").write_text(json.dumps(rep, indent=1))
     if not kept:
         print("no generated view passed: single-view result kept", flush=True); return
+    if a.no_idol:
+        return
     run_mv(photo, [vd / f"{s}.png" for s in kept], {f"{s}.png": known[f"{s}.png"] for s in kept}, work, a.gaussians,
            a.mode or ("real" if photo.suffix.lower() in (".jpg", ".jpeg") else "synthetic"))
 

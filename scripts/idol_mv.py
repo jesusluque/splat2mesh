@@ -31,6 +31,35 @@ def known_direction(yaw, pitch):
     return torch.tensor([math.cos(pitch) * math.sin(yaw), math.cos(pitch) * math.cos(yaw), math.sin(pitch)])
 
 
+SNAP = 25.0
+
+
+def estimate_offsets(model, conds, a, dev):
+    """Each picture's camera from a short single-view flow (its own object), as yaw relative to the front's."""
+    yaws = []
+    for c in conds:
+        g = torch.Generator(device=dev).manual_seed(a.seed)
+        lat = torch.randn(1, model.q_token_length, model.in_channels, device=dev, generator=g)
+        cam = torch.randn(1, 1, model.cam_channels, device=dev, generator=g)
+        ts = np.linspace(1, 0, a.auto_steps + 1); ts = a.rescale_t * ts / (1 + (a.rescale_t - 1) * ts)
+        for i in range(a.auto_steps):
+            t, tp = float(ts[i]), float(ts[i + 1])
+            s = TensorDict({"latent": lat, "camera": cam}, batch_size=1, device=dev)
+            tt = torch.tensor([1000 * t], device=dev, dtype=torch.float32)
+            v = model(s, tt, c); vn = model(s, tt, c.apply(torch.zeros_like))
+            vl = (1 + a.cfg_strength) * v["latent"] - a.cfg_strength * vn["latent"]
+            vc = (1 + a.cfg_strength) * v["camera"] - a.cfg_strength * vn["camera"]
+            lat = lat - vl * (t - tp); cam = cam - vc * (t - tp)
+        yaws.append(math.degrees(decode_camera(cam[0, 0])["yaw"]))
+    out = []
+    for y in yaws[1:]:
+        d = (y - yaws[0] + 180) % 360 - 180
+        q = round(d / 90) * 90
+        out.append(float(q if abs(d - q) <= SNAP else round(d, 1)))
+    print("single-view yaws:", [round(y, 1) for y in yaws], flush=True)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--images", nargs="+", required=True)
@@ -43,9 +72,11 @@ def main():
     ap.add_argument("--num_gaussians", type=int, default=262144)
     ap.add_argument("--weights_repo", default="speridlabs/idol")
     ap.add_argument("--dump-token", action="store_true")
-    ap.add_argument("--yaw-offsets", type=float, nargs="+", default=None,
+    ap.add_argument("--yaw-offsets", nargs="+", default=None,
                     help="degrees, one per picture after the first: its camera is the front's turned by this yaw "
-                         "(photos taken around the object; ties the views of symmetric objects)")
+                         "(photos taken around the object; ties the views of symmetric objects); 'auto': each picture's "
+                         "yaw from a short single-view pass, offsets to the front's snapped to 90 deg when within SNAP")
+    ap.add_argument("--auto-steps", type=int, default=12)
     ap.add_argument("--dir-norm", type=float, default=1.0,
                     help="length of the direction part of a camera token (decode_camera ignores it; read it with --dump-token)")
     a = ap.parse_args()
@@ -70,6 +101,11 @@ def main():
     t_seq = np.linspace(1, 0, a.steps + 1)
     t_seq = a.rescale_t * t_seq / (1 + (a.rescale_t - 1) * t_seq)
 
+    if a.yaw_offsets == ["auto"]:
+        a.yaw_offsets = estimate_offsets(model, conds, a, dev)
+        print("yaw offsets (auto):", a.yaw_offsets, flush=True)
+    elif a.yaw_offsets:
+        a.yaw_offsets = [float(x) for x in a.yaw_offsets]
     rel = [None] + ([math.radians(d) for d in a.yaw_offsets] if a.yaw_offsets else [None] * (n - 1))
     assert len(rel) == n, "one yaw offset per picture after the first"
     target = list(fixed)
