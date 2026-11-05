@@ -18,9 +18,11 @@ def main():
     ap.add_argument("--image", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--seed", type=int, default=42); ap.add_argument("--steps", type=int, default=50)
     ap.add_argument("--gaussians", type=int, default=262144)
+    ap.add_argument("--blocks", default="OzzyGT/idol_custom_blocks",
+                    help="blocks repo or a local snapshot folder (offline: HF_HUB_OFFLINE=1 and the cached snapshot path)")
     a = ap.parse_args()
     t0 = time.time()
-    pipe = ModularPipeline.from_pretrained("OzzyGT/idol_custom_blocks", trust_remote_code=True)
+    pipe = ModularPipeline.from_pretrained(a.blocks, trust_remote_code=True)
     pipe.load_components(dtype=torch.bfloat16)
     pipe.to("cuda")
     kw = {"num_inference_steps": a.steps}
