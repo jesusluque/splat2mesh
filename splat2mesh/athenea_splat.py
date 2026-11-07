@@ -69,18 +69,24 @@ def glass_surfels(asset_dir, xyz, q, scl, op, sel_glass, ior=None, tol_voxels: f
     pick = order[first]
     k = cand[pick]
     keep = np.ones(len(xyz), bool); keep[gi] = False; keep[k] = True
-    xyz[k] = sp_pos[pick]
-    n = N[cidx[pick]].astype(np.float32)
+    # on the surface point nearest to the cell's centre: close to a regular grid, so the overlapping discs sum to an
+    # even cover (a jittered layout sums unevenly: speckle)
+    centre = (key[pick] + 0.5) * cell
+    _, ci = cKDTree(P).query(centre)
+    xyz[k] = P[ci]
+    n = N[ci].astype(np.float32)
     a = np.where(np.abs(n[:, 0:1]) < 0.9, np.array([[1.0, 0, 0]]), np.array([[0, 1.0, 0]]))
     t1 = np.cross(n, a); t1 /= np.linalg.norm(t1, axis=1, keepdims=True); t2 = np.cross(n, t1)
     q[k] = _quat_from_frames(t1, t2, n)
-    st = np.full(len(k), 0.6 * cell, np.float32)          # discs that close the surface at this spacing
+    SIGMA = 0.75                                          # disc sigma / spacing: overlapping discs sum flat
+    st = np.full(len(k), SIGMA * cell, np.float32)
     scl[k] = np.stack([st, st, np.maximum(st * 0.05, 1e-5)], 1)
     # athenea's thin wall: opacity 2·R0/(1+R0) (its render scales the reflection by 1/R0), so the blend gives a
     # sheet's reflectance and the rest passes straight (mesh2splat's m2sGlassCovers)
     i_ = np.asarray(ior[k] if ior is not None else np.full(len(k), 1.5), np.float64)
     r0 = ((i_ - 1) / (i_ + 1)) ** 2
-    op[k] = (2 * r0 / (1 + r0)).astype(np.float32)
+    # that value is the COVER the overlapping discs add up to; a disc of sigma s at spacing h covers 2π·s²/h² cells
+    op[k] = (2 * r0 / (1 + r0) / (2 * np.pi * SIGMA ** 2)).astype(np.float32)
     return keep, k, n
 
 
