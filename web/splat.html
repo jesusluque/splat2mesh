@@ -109,7 +109,7 @@
     // glassCover: how much of a glass cloud is drawn as its lens (8: all of it, so it refracts; athenea's own alpha
     // lets much of the view straight through). ?glassCover= or the model's json
     const cover = params.get("glassCover") ?? info.glassCover;
-    const relight = atheneaRelightPlugin({ pixelDetail: (params.get("detail") ?? String(info.pixelDetail ?? 0)) === "1", ...(cover != null ? { glassCover: Number(cover) } : {}) });
+    const relight = atheneaRelightPlugin({ pixelDetail: ["1", "true"].includes(String(params.get("detail") ?? info.pixelDetail ?? 0)), ...(cover != null ? { glassCover: Number(cover) } : {}) });
     clouds.forEach((c, i) => { if (c.ior) relight.setIor(meshes[i], c.ior); });
     const display = atheneaOutputPlugin({ view: params.get("view") ?? "agx", exposure: 0 });
     let host = null;
