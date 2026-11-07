@@ -48,10 +48,34 @@ def sh(cmd, **kw):
     return r.stdout
 
 
-def idol(image: Path, work: Path, gaussians: int) -> Path:
+SEEDS = [42, 1, 2, 3, 4, 5, 6, 7]
+
+
+def idol(image: Path, work: Path, gaussians: int, seeds: int = 1) -> Path:
     """Image → 3DGS .ply with Idol on the configured host (synthetic mode for renders/generated images, real for
-    photos); idol_input.png and idol_camera.json land next to it."""
-    return idol_sample(image, work, gaussians)
+    photos); idol_input.png and idol_camera.json land next to it. seeds > 1: Idol is sampled with that many seeds,
+    each sample is rendered from its own camera and 90/180/270° around (athenea) and scored against the picture by
+    the DeepSeek validator (scripts/mv_check.py); the best one is kept and seeds.json records all the scores."""
+    if seeds <= 1:
+        return idol_sample(image, work, gaussians)
+    scores = {}
+    for s in SEEDS[:seeds]:
+        d = work / "seeds" / f"s{s}"
+        ply = idol_sample(image, d, gaussians, seed=s)
+        try:
+            sh(["bash", str(ROOT / "scripts/seed_views.sh"), str(ply), str(d / "idol_camera.json"), str(image), str(d / "check")])
+            scores[s] = json.loads((d / "check.check.json").read_text())["score"]
+        except Exception as e:                   # no DeepSeek / no renderer: keep the seed unscored
+            print(f"    seed {s}: not scored ({str(e)[-200:]})", flush=True); scores[s] = None
+        print(f"    seed {s}: score {scores[s]}", flush=True)
+    best = max(scores, key=lambda k: -1 if scores[k] is None else scores[k])
+    (work / "seeds.json").write_text(json.dumps({"scores": scores, "best": best}, indent=1))
+    b = work / "seeds" / f"s{best}"
+    for f in ("idol_input.png", "idol_camera.json"):
+        if (b / f).exists():
+            shutil.copy(b / f, work / f)
+    shutil.copy(b / f"{image.stem}.ply", work / f"{image.stem}.ply")
+    return work / f"{image.stem}.ply"
 
 
 def process(inp: Path, out_root: Path, a) -> dict:
@@ -69,7 +93,7 @@ def process(inp: Path, out_root: Path, a) -> dict:
                     str(ROOT / "scripts/upscale_detail.py"), str(inp), "", str(work / "upscale"),
                     "--restore-only", str(up)], stdin=subprocess.DEVNULL)
                 rep["upscaled"] = True
-                ply = idol(up, work, a.gaussians)
+                ply = idol(up, work, a.gaussians, a.seeds)
                 (work / f"{up.stem}.ply").rename(work / f"{inp.stem}.ply"); ply = work / f"{inp.stem}.ply"
             elif a.views:              # several real photos of the object: Idol from all of them (idol_mv.py)
                 from gen_views import run_mv
@@ -81,7 +105,7 @@ def process(inp: Path, out_root: Path, a) -> dict:
                 shutil.copy(work / f"{inp.stem}_mv_camera.json", work / "idol_camera.json")
                 rep["views"] = {"photos": a.views}
             else:
-                ply = idol(inp, work, a.gaussians)
+                ply = idol(inp, work, a.gaussians, a.seeds)
             if a.multiview == "gen" and not a.views:   # hidden sides generated (Iris) and given back to Idol
                 sh([PY, str(ROOT / "scripts/gen_views.py"), str(inp), str(ply), str(work / "idol_camera.json"),
                     str(work), "--gaussians", str(a.gaussians)])
@@ -167,6 +191,8 @@ def main():
     ap.add_argument("--render-tex", type=int, default=2048, help="texture size cap on the render path")
     ap.add_argument("--skip-done", action="store_true", help="skip inputs whose report.json says ok")
     ap.add_argument("--gaussians", type=int, default=262144)
+    ap.add_argument("--seeds", type=int, default=1,
+                    help="Idol samples to draw; > 1 keeps the one the DeepSeek validator scores best from four sides")
     ap.add_argument("--upscale", action="store_true",
                     help="pass the object crop through the Iris-3B restorer before Idol (Mac, ~4 min)")
     ap.add_argument("--views", nargs="+", default=None,
