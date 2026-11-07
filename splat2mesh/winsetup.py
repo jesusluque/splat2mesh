@@ -48,6 +48,15 @@ VAE = {"klein": "black-forest-labs/FLUX.2-klein-4B", "dev": "black-forest-labs/F
 USER_CONFIG = Path(os.environ.get("APPDATA") or Path.home() / ".config") / "splat2mesh" / "config.toml"
 COMPONENTS = ("athenea", "idol", "eneas", "iris")
 
+# Windows pipes default to the ANSI code page: text with "→" or accents would stop a step. UTF-8 here and in every
+# process started from here
+os.environ.setdefault("PYTHONUTF8", "1"); os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 
 def progress(pct: float, comp: str, msg: str):
     print(f"PROGRESS {int(max(0, min(100, pct)))} {comp}: {msg}", flush=True)

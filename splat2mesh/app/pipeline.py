@@ -18,6 +18,7 @@ Progress lines:  PROGRESS <0-100> <stage>: <message>      Outputs:  <out>/result
 from __future__ import annotations
 
 import json
+import os
 import math
 import shutil
 import subprocess
@@ -28,6 +29,15 @@ from pathlib import Path
 from ..config import ROOT, cfg, iris_python
 
 PY = sys.executable
+
+# Windows pipes default to the ANSI code page: text with "→" or accents would stop a step. UTF-8 here and in every
+# process started from here
+os.environ.setdefault("PYTHONUTF8", "1"); os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 
 class Progress:

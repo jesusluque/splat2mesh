@@ -98,7 +98,7 @@ class Jobs:
                 continue
             j["status"] = "running"; j["started"] = time.time(); self._save(j)
             log = open(self.dir / jid / "console.txt", "w", encoding="utf-8")
-            env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+            env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
             env.update(self.env.pop(jid, {}))
             p = subprocess.Popen(self._cmd(j), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                  encoding="utf-8", errors="replace", cwd=ROOT, env=env)
