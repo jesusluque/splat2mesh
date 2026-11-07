@@ -1,8 +1,9 @@
 # Tutorial: from an image (or a text prompt) to a UV-textured USD
 
 Result of this tutorial: a 20 030-face USD with UVs, 0 open edges, 0 non-manifold edges, in about 12 min.
+For automatic PBR materials on top of this, continue with [TUTORIAL.md](TUTORIAL.md).
 
-A fully open chain, every model and tool permissively licensed:
+An open chain (licences of every piece in [licenses.md](licenses.md)):
 
 ```
 text ──Iris-3B Turbo──▶ image ──Idol──▶ 3D Gaussian splat ──splat2mesh──▶ USD mesh + UV + texture
@@ -16,7 +17,7 @@ You can also enter the chain with your own image or with an existing 3DGS `.ply`
 ```sh
 git clone https://github.com/jesusluque/splat2mesh.git && cd splat2mesh
 uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -r requirements.txt gradio_client
+uv pip install --python .venv/bin/python -r requirements.txt
 ```
 
 ## 2. Check it works (no GPU)
@@ -30,7 +31,7 @@ them. It takes about 40 s and should print something like:
 
 ```json
 "faces": 19998, "boundary_edges": 0, "non_manifold_edges": 0,
-"chamfer_mean": 0.0023, "texture_psnr_db": 27.4
+"chamfer_mean": 0.0023, "texture_psnr_db": 31.3
 ```
 
 `chamfer_mean` is the shape error against the true geometry (here ≈ 0.25 % of the object size);
@@ -65,13 +66,16 @@ With the white background the back is cleaner and whiter, and the mesh came out 
 ## 4. Image → splat → USD, in one command
 
 ```sh
-.venv/bin/python scripts/splat2usd.py lucky_cat.png --gaussians 524288 --out out/tutorial
+.venv/bin/python scripts/splat2usd.py lucky_cat.png --gaussians 524288 --faces 20000 --tex 2048 --out out/tutorial
 ```
+
+(`--faces 20000 --tex 2048` reproduce the numbers below; the defaults are now 80 000 faces and a 4096² texture,
+capped at 2048² on this path.)
 
 What happens:
 
-1. **Idol** turns the image into a 3D Gaussian splat on a CUDA machine (`SPLAT2MESH_IDOL_HOST`), ~3 min on
-   an 8 GB laptop GPU.
+1. **Idol** turns the image into a 3D Gaussian splat on a CUDA machine (`SPLAT2MESH_IDOL_HOST`, see
+   [setup.md](setup.md)), ~3 min on an 8 GB GPU.
 2. The splat is rendered from **87 cameras** around it, with colour, mask and depth (~6 min).
 3. The depth maps are fused into a surface, cleaned, reduced to 20 000 faces and closed.
 4. **xatlas** unwraps the UVs; the colour of every view is baked into one texture.
@@ -118,12 +122,14 @@ A whole folder of images and `.ply` files is a batch: `splat2usd.py my_folder/ -
 
 Instead of photographing the splat from 87 cameras, `--direct` builds the mesh **straight from the gaussians**:
 
-1. Every gaussian adds its opacity to a 3D grid (≈ 320 cells across the object): `O(x) = 1 − Π(1 − αᵢ·Gᵢ(x))`.
-2. The solid is where the opacity passes 0.3; small gaps between gaussians are closed, hollow insides are
+1. Every gaussian adds its opacity to a 3D grid (448 cells across the object): `O(x) = 1 − Π(1 − αᵢ·Gᵢ(x))`.
+2. The solid is where the opacity passes 0.15; small gaps between gaussians are closed, hollow insides are
    filled and loose specks are dropped, so the result is **one closed shell**.
-3. Marching cubes gives the surface; a topology-preserving quadric decimation brings it to 20 000 faces
+3. Marching cubes gives the surface; a topology-preserving quadric decimation brings it to the face budget
    without breaking it apart.
-4. Each texel of the UV atlas takes the colour of the gaussians right at the surface, weighted by how much
+4. If the surface comes out crumpled (more than 300 folded edges), splat2usd switches to the render path by
+   itself.
+5. Each texel of the UV atlas takes the colour of the gaussians right at the surface, weighted by how much
    they cover that point (gaussians buried inside barely count).
 
 Same cat, left the splat, right the `--direct` mesh:
@@ -136,6 +142,9 @@ And its UV map (texture with triangle outlines, and the layout on its own):
 
 The direct mesh is smoother and cleaner, so xatlas cuts it into far fewer, larger charts: the face, the 福
 coin and the flank flowers each sit in one chart. The black chart is again the underside that Idol leaves dark.
+
+Measured with the direct mode of that time (320³ grid, level 0.3, blur 0.8, 20 000 faces);
+[pipeline.md](pipeline.md) has the current defaults and why they changed.
 
 | Same splat | render path (default) | `--direct` |
 |---|---|---|
@@ -166,7 +175,7 @@ Reading `report.json`:
 | Field | Meaning | Good |
 |---|---|---|
 | `mesh.boundary_edges` | open edges (holes) | 0 |
-| `mesh.non_manifold_edges` | edges shared by more than 2 faces | ≤ 20 |
+| `mesh.non_manifold_edges` | edges shared by more than 2 faces | ≤ 20 (render path), ≤ 200 (direct mode) |
 | `mesh.uv_charts` | UV islands | fewer is better |
 | `qa.psnr_mean` | how close the textured mesh looks to the splat, dB | ≥ 22 (26–30 is very good) |
 | `t_total_s` | total time | |
@@ -177,11 +186,14 @@ Always look at `compare.png`: it is the quickest way to spot a problem.
 
 | Option | What for |
 |---|---|
-| `--faces 50000` | more geometric detail (default 20 000) |
-| `--tex 4096` | bigger texture (default 2048) |
+| `--direct` | mesh from the gaussians, ~1 min (recommended for Idol splats) |
+| `--faces 20000` | fewer faces (default 80 000) |
+| `--tex 2048` | smaller texture (default 4096; the render path caps it at 2048 with `--render-tex`) |
+| `--max-folds 300` | direct mode: folded edges above which the render path is used |
 | `--smooth 3` | smoother surface; recommended for glass, slightly less accurate on opaque objects |
 | `--min-psnr 25` | stricter threshold for "ok" |
-| `--notify` | send the summary and images when a batch ends |
+| `--notify` | send the summary and images when a batch ends (`SPLAT2MESH_NOTIFY`) |
+| `--skip-done` | in a batch, skip inputs whose `report.json` is already ok |
 
 ## 7. Glass
 

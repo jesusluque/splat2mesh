@@ -1,14 +1,16 @@
 """splat2usd: one command from an image or a 3DGS .ply to a UV-textured USD, with a QA report.
 
-    python scripts/splat2usd.py INPUT [INPUT ...] [--out out/auto] [--faces 20000] [--tex 2048]
+    python scripts/splat2usd.py INPUT [INPUT ...] [--out out/auto] [--direct] [--faces 80000] [--tex 4096]
                                 [--y-down | --y-up] [--gaussians 262144] [--notify]
 
 INPUT can be:
-  - an image (.png/.jpg/.webp): Idol on ixwin (speridlabs, image → 3DGS) generates the splat first;
+  - an image (.png/.jpg/.webp): Idol (speridlabs, image → 3DGS) generates the splat first, on the CUDA host
+    named by SPLAT2MESH_IDOL_HOST (docs/setup.md);
   - a 3DGS .ply: used as is;
   - a folder: every image/.ply inside it (batch).
 
-Steps per input: [Idol on ixwin] → cameras framing the splat → athenea `render --splats` (one shared.sh job)
+Steps per input: [Idol] → --direct: mesh from the splat's opacity field; otherwise cameras framing the splat →
+athenea `render --splats` (one job under the GPU lock)
 → TSDF + visual hull → clean, decimate, cap → xatlas UV → robust multi-view bake → USD → QA
 (mesh stats + re-render PSNR + compare.png) → report.json; a summary table for the batch at the end.
 
@@ -16,6 +18,7 @@ Several views (like Tripo's "Multiview to 3D"):
   --views LEFT BACK RIGHT   more photos of the one input object; Idol is sampled from all of them (idol_mv.py)
   --multiview gen           one photo: the hidden sides are rendered from the first splat, cleaned by Iris, checked
                             (outline kept, deepseek-flash sees the same object) and given back to Idol (gen_views.py)
+  Both are experimental: in the measurements so far they did not beat one photo (docs/multiview.md).
 """
 from __future__ import annotations
 
@@ -203,7 +206,7 @@ def main():
     ap.add_argument("--min-psnr", type=float, default=22.0)
     ap.add_argument("--glass", default=None, help="BACKGROUND.json: estimate a glass material (IOR, tint) and apply it")
     ap.add_argument("--glass-views", default=None, help="views of the object in front of that background (default: the splat renders)")
-    ap.add_argument("--notify", action="store_true", help="Telegram summary + compare images at the end")
+    ap.add_argument("--notify", action="store_true", help="send the summary and compare images through SPLAT2MESH_NOTIFY at the end")
     a = ap.parse_args()
 
     items = []
