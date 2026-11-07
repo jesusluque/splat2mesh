@@ -19,7 +19,8 @@ def describe_ds(image, prompt, max_parts=20):
          "most of its visible surface (body, clothing, footwear, hands, face, hair, large panels or boards), then smaller "
          "details. List visible glass or transparent parts as their own part, and use a transparent material (glass, "
          "crystal, gemstone) ONLY for parts you can see through in the picture: glossy or shiny is not transparent "
-         "(a figurine's glossy eyes are paint). A painted figurine or model: name the "
+         "(a figurine's glossy eyes are paint). A character's visible eyes are their own part ('the eyes', gloss "
+         "paint), apart from the face's skin, so they keep their gloss and colour. A painted figurine or model: name the "
          "material each painted part represents (steel, wood, leather, skin, hair / fur...), not the paint. Each part "
          "once." + (f' The image was generated from this description: "{prompt}".' if prompt else "") +
          ' Answer JSON: {"materials": [{"material": ..., "parts": ["the ...", ...]}]}')
