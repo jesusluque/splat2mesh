@@ -136,6 +136,11 @@ was made.
 | `materials.py`, `overlap.py`, `gs_materials.py`, `openings.py`, `interior.py`, `glass.py` | materials ([materials](materials.md)) |
 | `ply.py` | PLY vertex I/O (numpy) |
 
+## Web page
+
+`web/splat.html`: one relightable splat in the browser (Spark WebGPU + athenea's relighting), with an HDRI picker;
+how to prepare a model is in `web/README.md`.
+
 ## Other folders
 
 - `tests/synthetic.py`, `tests/glass_selftest.py`: the CPU tests ([setup](setup.md)).

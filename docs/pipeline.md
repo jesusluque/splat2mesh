@@ -26,6 +26,9 @@ INPUT (.png/.jpg/.webp or 3DGS .ply)
 - Idol removes the background itself (BiRefNet) and works on a 1024² crop of the object composited on black. Its
   output is **Y-down**; splat2usd turns it upright automatically. A `.ply` from elsewhere is assumed Y-up unless
   `--y-down` is given.
+- **`--seeds N`** draws N Idol samples (seeds 42, 1, 2, …), renders each from its own predicted camera and from
+  90/180/270° around it with athenea, has the DeepSeek validator score it against the picture and keeps the best
+  ([multiview.md](multiview.md)); `seeds.json` records the scores. Each extra seed costs one Idol run plus ~2 min.
 - Idol also predicts the camera of the input picture (`idol_camera.json`: yaw, pitch in radians, radius, fov). Later
   stages use it to find the view that matches the picture. (On a Linux Idol host, `SPLAT2MESH_IDOL_LINUX=1`, the
   camera file is not fetched yet.)

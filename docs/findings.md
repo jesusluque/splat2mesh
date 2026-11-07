@@ -86,6 +86,18 @@ the test objects named in each item; "cat" is the lucky-cat figurine of the tuto
 - **Materials on the splat** (`--gs`): voting per gaussian gave direct votes to 88 % of the gaussians against 6–16 %
   of the texels with the mesh orbit, and removed the metal spreading over unvoted texels.
 
+## Rendering
+
+- **One athenea process for a whole turntable.** One process per frame cost 46 s a 1080² frame even in raster:
+  nearly all of it was loading the scene (USD, five 4096² textures, HDRI, shaders). `stage --turntable` loads once:
+  24 raster frames in 63 s, about 17 times faster.
+- **Raster is enough for opaque assets.** Under the prefiltered studio HDRI, athenea's raster looked like its path
+  tracer on the dwarf (107 s a frame at 96 spp); path tracing is kept for glass and translucency.
+- **A splat can be relit without a mesh.** The per-gaussian materials exported to athenea's particle-field USD
+  relight in athenea, and converted to .athc they relight live in the browser with athenea's code in Spark WebGPU.
+  Idol's colour is radiance with the light baked in, so relighting uses the finished albedo of the mesh's texture,
+  projected back to the gaussians.
+
 ## Rendering for the gallery
 
 - Polished metals need something to reflect: under a flat grey dome they looked transparent. Stills use a studio

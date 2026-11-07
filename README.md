@@ -55,7 +55,8 @@ scripts/seed_views.sh seeds/s42/dwarf.ply seeds/s42/dwarf_camera.json dwarf.png 
 <img src="docs/img/dwarf/2_seeds.jpg" width="100%">
 
 Seed 42 scored 4.12 (the axe slightly flat), seed 1 4.04, seeds 2 and 3 3.38 (the shield flips side between views,
-the beard shows from behind). Seed 42 is kept. Its splat, rendered with athenea:
+the beard shows from behind). Seed 42 is kept. `splat2usd.py --seeds 4` does the sampling, the four-side renders, the scoring and the choice in
+one command. The kept splat, rendered with athenea:
 
 <img src="docs/img/dwarf/3_splat.jpg" width="100%">
 

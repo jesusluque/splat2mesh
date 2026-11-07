@@ -42,6 +42,8 @@ spread (0.33) is only a little larger than the validator's noise (0.22), so sele
 clearly (a duplicated front, a collapsed back). Each extra seed costs about 2.5 min of Idol on an RTX 3070, plus
 about 2 min of renders and checks.
 
+`splat2usd.py --seeds 4` does all of this inside the pipeline and keeps the best sample.
+
 The seed's own camera matters: each Idol sample predicts its own input camera. Renders for the validator must use
 that sample's camera (saved by Idol in `_camera.json`, or as a latent in `_camera.pt` by the Diffusers version),
 not another seed's.
