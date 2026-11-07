@@ -8,7 +8,7 @@
 
 #define AppName "splat2mesh"
 #ifndef AppVersion
-  #define AppVersion "0.4.1"
+  #define AppVersion "0.4.2"
 #endif
 #ifndef Staging
   #define Staging "staging"
@@ -141,6 +141,8 @@ begin
     + 'in your user folder (%APPDATA%\splat2mesh). Both can be left empty and given later in the app.');
   KeysPage.Add('Hugging Face token:', True);
   KeysPage.Add('DeepSeek API key:', True);
+  KeysPage.Add('Or a local DINOv3 folder (offline install, no token needed):', False);
+  KeysPage.Values[2] := ExpandConstant('{param:DINOV3|}');
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
@@ -256,6 +258,8 @@ begin
     begin
       Lo := 130 + I * Span;
       Comps := '-u -m splat2mesh.winsetup install ' + List[I] + ' --vae ' + Vae + ' --iris-mode ' + IrisMode;
+      if (List[I] = 'idol') and (Trim(KeysPage.Values[2]) <> '') then
+        Comps := Comps + ' --dinov3-dir "' + Trim(KeysPage.Values[2]) + '"';
       Tok := Trim(KeysPage.Values[0]);
       if (List[I] = 'idol') and (Tok <> '') then
       begin

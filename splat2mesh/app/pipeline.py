@@ -69,8 +69,23 @@ def sh(cmd, log: Path, **kw):
         raise RuntimeError(f"{Path(str(cmd[1] if len(cmd) > 1 else cmd[0])).name} failed\n{tail}")
 
 
+FILL = ("the object fills the entire frame edge to edge, tightly framed, sharp focus on every detail, "
+        "studio product photo, soft even light, plain pure white background")
+
+
+def framed(prompt: str) -> str:
+    """The prompt with the framing Idol does best with, unless it already asks for it."""
+    low = prompt.lower()
+    if "fills the" in low or "edge to edge" in low:
+        return prompt
+    return prompt.rstrip(" .,") + ", " + FILL
+
+
 def text2image(job, out: Path, log: Path, prog) -> Path:
     t = job.get("text2image", {})
+    if t.get("fill", True):
+        job = {**job, "prompt": framed(job["prompt"])}
+        (out / "prompt_used.txt").write_text(job["prompt"])
     mode = t.get("mode", "auto")
     if mode == "auto":
         mode = cfg("iris.mode") or "gpu"

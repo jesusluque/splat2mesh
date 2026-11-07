@@ -1,6 +1,6 @@
 # Builds the Windows installer: a staging copy of the code (no outputs, no environments), then Inno Setup.
 #   powershell -ExecutionPolicy Bypass -File installer\build.ps1 [-Version 0.4.0] [-Iscc "C:\...\ISCC.exe"]
-param([string]$Version = "0.4.1", [string]$Iscc = "")
+param([string]$Version = "0.4.2", [string]$Iscc = "")
 $ErrorActionPreference = "Stop"
 $Repo = Split-Path -Parent $PSScriptRoot
 $Stage = Join-Path $PSScriptRoot "staging"

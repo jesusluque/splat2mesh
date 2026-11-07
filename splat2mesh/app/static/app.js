@@ -53,7 +53,7 @@ $("#image").onchange = () => { const f = $("#image").files[0]; const im = $("#im
 
 function options() {
   return {
-    text2image: { seed: +$("#t2i_seed").value, size: $("#t2i_size").value, mode: $("#t2i_mode").value },
+    text2image: { seed: +$("#t2i_seed").value, size: $("#t2i_size").value, mode: $("#t2i_mode").value, fill: $("#t2i_fill").checked },
     idol: { seeds: +$("#seeds").value, gaussians: +$("#gaussians").value, mode: $("#idol_mode").value,
             steps: +$("#idol_steps").value, cfg: +$("#idol_cfg").value, rescale_t: +$("#idol_rescale").value,
             dinov3_dtype: $("#idol_dino").value },

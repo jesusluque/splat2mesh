@@ -43,9 +43,18 @@
     <div data-when="prompt">
       <label>Describe one object, whole, centred, on a plain white background
         <textarea id="prompt" rows="4" placeholder="A painted fantasy miniature figurine of a stout dwarf warrior... studio product photo, plain white background"></textarea></label>
+      <label class="check"><input id="t2i_fill" type="checkbox" checked><span><b>Fill the frame, full detail</b> — adds
+        "the object fills the entire frame edge to edge, tightly framed, sharp focus on every detail, studio product
+        photo, soft even light, plain pure white background" when the sentence does not say it: Idol gets the most
+        pixels on the object and a clean background (it borrows the background's colour for the hidden sides).</span></label>
       <div class="row">
         <label>Seed <input id="t2i_seed" type="number" value="7"></label>
-        <label>Size <select id="t2i_size"><option>1024x1024</option><option>768x768</option></select></label>
+        <label>Size (Iris-3B Turbo's native buckets, ~1 MP) <select id="t2i_size">
+          <option value="1024x1024" selected>1024 × 1024 square</option>
+          <option value="896x1200">896 × 1200 portrait (tall objects)</option><option value="896x1344">896 × 1344 portrait, taller</option>
+          <option value="752x1344">752 × 1344 portrait, slender</option>
+          <option value="1200x896">1200 × 896 landscape (wide objects)</option><option value="1344x896">1344 × 896 landscape, wider</option>
+          <option value="1344x752">1344 × 752 landscape, long</option></select></label>
         <label>Iris-3B <select id="t2i_mode">
           <option value="auto">as in Settings</option><option value="cpu-encoder">local, text encoder on CPU (8 GB GPUs)</option>
           <option value="gpu">local, all on GPU (16 GB+)</option><option value="space">online Space</option></select></label>
