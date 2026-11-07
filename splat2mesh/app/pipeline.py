@@ -6,7 +6,8 @@ JOB.json (every key optional except source and its input):
   {"name": "dragon", "out": "<folder>",
    "source": "prompt" | "image" | "splat",
    "prompt": "...", "image": "path.png", "splat": "path.ply", "camera": "idol_camera.json", "input": "idol_input.png",
-   "text2image": {"seed": 7, "size": "1024x1024", "mode": "auto" | "gpu" | "cpu-encoder" | "space"},
+   "text2image": {"seed": 7, "size": "1024x1024", "mode": "auto" | "gpu" | "cpu-encoder" | "space", "fill": true},
+   "detail": "all" | "faces" | "off",           # Iris-3B restorer's detail at the picture's own size, before Idol
    "idol": {"seeds": 1, "gaussians": 262144, "mode": "auto" | "synthetic" | "real", "steps": 50, "cfg": 3.0,
             "rescale_t": 3.0, "dinov3_dtype": "bf16" | "fp32"},
    "outputs": {"splat": true, "mesh": false, "materials": true},
@@ -103,6 +104,28 @@ def text2image(job, out: Path, log: Path, prog) -> Path:
             sh(cmd, log)
     prog("picture", 1, "picture ready")
     return png
+
+
+def detail(job, image: Path, out: Path, log: Path, prog) -> Path:
+    """The Iris-3B restorer's detail at the picture's own size (scripts/detail_pass.py): the whole picture and the
+    faces, or the faces only. Needs Iris installed locally; otherwise the picture goes on as it is."""
+    mode = job.get("detail", "all")
+    from ..config import iris_python
+    if mode == "off" or cfg("iris.mode") == "space" or not Path(iris_python()).exists():
+        if mode != "off":
+            prog("detail", 1, "no local Iris-3B: picture used as it is")
+        return image
+    prog("detail", 0.05, "Iris-3B restorer: " + ("whole picture, then the faces" if mode == "all" else "the faces"))
+    dst = out / ("detail" + image.suffix)
+    try:
+        sh([PY, ROOT / "scripts/detail_pass.py", image, dst] + (["--all"] if mode == "all" else []), log)
+    except Exception as e:                        # no DeepSeek for the faces, etc.: keep what there is
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(f"detail pass skipped: {e}\n")
+        prog("detail", 1, "detail pass skipped (see the log)")
+        return image
+    prog("detail", 1, "detail added")
+    return dst
 
 
 def idol(job, image: Path, out: Path, log: Path, prog) -> tuple[Path, Path, Path]:
@@ -233,6 +256,8 @@ def run(job: dict) -> dict:
     if job["source"] == "prompt":
         stages.append(("picture", 5))
     if job["source"] in ("prompt", "image"):
+        if job.get("detail", "all") != "off":
+            stages.append(("detail", 5))
         stages.append(("splat", 20 * max(1, int(job.get("idol", {}).get("seeds", 1)))))
     if o["splat"]:
         stages.append(("materials", 45))
@@ -249,6 +274,8 @@ def run(job: dict) -> dict:
         image = out / ("input" + Path(job["image"]).suffix.lower())
         shutil.copy(job["image"], image)
     if job["source"] in ("prompt", "image"):
+        image = detail(job, image, out, log, prog)
+        res["files"]["detail"] = str(image)
         ply, cam, inp = idol(job, image, out, log, prog)
     else:
         src = out / "src"; src.mkdir(exist_ok=True)          # inside the job: the app can show and serve them

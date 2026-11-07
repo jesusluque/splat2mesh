@@ -37,6 +37,7 @@ function renderSteps() {
   $$("#steps li").forEach((li) => li.onclick = () => { step = +li.dataset.i; renderSteps(); });
   $$(".step").forEach((s) => s.classList.toggle("on", s.dataset.step === vs[step][0]));
   $$("[data-when]").forEach((e) => e.style.display = e.dataset.when === source() ? "" : "none");
+  $$("[data-when-detail]").forEach((e) => e.style.display = source() === "splat" ? "none" : "");
   $$("[data-when-batch]").forEach((e) => e.style.display = e.dataset.whenBatch === batchKind() ? "" : "none");
   $$("[data-when-out=mesh]").forEach((e) => e.style.display = $("#out_mesh").checked ? "" : "none");
   $("#back").disabled = step === 0;
@@ -64,6 +65,7 @@ function options() {
                  deepseek_model: $("#ds_model").value.trim() },
     glass: { mode: $("#glass_mode").value, cell: +$("#glass_cell").value },
     parts: $("#parts").value.trim(),
+    detail: $("#detail").value,
     render: { turntable: $("#tt").checked, frames: +$("#frames").value, size: +$("#size").value,
               technique: $("#technique").value, hdri: $("#hdri").value, spp: +$("#spp").value,
               elev: +$("#elev").value, dist: +$("#dist").value, grey: +$("#grey").value },
@@ -73,7 +75,7 @@ function options() {
 function estimate(o, n) {      // minutes on an 8 GB RTX, from measured runs
   let m = 0;
   if (source() === "prompt" || (source() === "batch" && batchKind() === "prompts")) m += 1.5;
-  if (source() !== "splat") m += o.idol.seeds * (o.idol.seeds > 1 ? 4.5 : 3);
+  if (source() !== "splat") m += o.idol.seeds * (o.idol.seeds > 1 ? 4.5 : 3) + (o.detail === "all" ? 4 : o.detail === "faces" ? 1 : 0);
   if (o.outputs.splat) m += o.outputs.materials ? 30 : 1;
   if (o.outputs.mesh) m += o.outputs.materials ? (o.outputs.splat ? 6 : 33) : 2;
   if (o.render.turntable) m += (o.outputs.splat + o.outputs.mesh) * (o.render.technique === "rt" ? 6 : 1.5);
@@ -108,6 +110,7 @@ function summary() {
   const outs = [o.outputs.splat && "relightable splat", o.outputs.mesh && "mesh USD"].filter(Boolean).join(" + ") || "none";
   const rows = [
     ["Start", { prompt: "a sentence", image: "a picture", splat: "an Idol splat", batch: `batch of ${n} ${batchKind() === "prompts" ? "sentences" : "pictures"}` }[s]],
+    ["Detail", s === "splat" ? "—" : { all: "whole picture + faces (Iris restorer)", faces: "faces (Iris restorer)", off: "off" }[o.detail]],
     ["Idol", s === "splat" ? "—" : `${o.idol.seeds} seed${o.idol.seeds > 1 ? "s (best kept)" : ""}, ${o.idol.gaussians.toLocaleString()} gaussians`],
     ["Outputs", outs], ["Materials", o.outputs.materials ? (o.parts ? "by hand: " + o.parts : "automatic (DeepSeek + ENEAS)") : "none"],
     ["Turntable", o.render.turntable ? `${o.render.frames} frames, ${o.render.size}px, ${o.render.technique}, ${o.render.hdri || "studio"}` : "none"],

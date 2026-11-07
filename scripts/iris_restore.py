@@ -11,7 +11,12 @@ from pathlib import Path
 import torch
 from PIL import Image
 
-IRIS = Path(__file__).resolve().parents[1] / "third_party/iris-3b"
+ROOT = Path(__file__).resolve().parents[1]; sys.path.insert(0, str(ROOT))
+try:                                 # the configured Iris checkout (tools/iris-3b on Windows), else third_party
+    from splat2mesh.config import cfg
+    IRIS = Path(cfg("iris.dir")).expanduser()
+except Exception:
+    IRIS = ROOT / "third_party/iris-3b"
 sys.path.insert(0, str(IRIS / "src"))
 from iris3b.downstream import restoration as R
 from iris3b.models.dit import IrisDiT
@@ -54,12 +59,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("inp"); ap.add_argument("out")
     ap.add_argument("--scale", type=float, default=2.0); ap.add_argument("--no-color-fix", action="store_true")
+    ap.add_argument("--no-budget", action="store_true", help="keep the input's size (no downscale first)")
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cuda")
     a = ap.parse_args()
     t0 = time.time()
     r = Restorer16("speridlabs/iris-3b/upscaler", a.device)
     im = Image.open(a.inp).convert("RGB")
-    im = R.fit_budget(im) if hasattr(R, "fit_budget") else im
+    if not a.no_budget:
+        im = R.fit_budget(im) if hasattr(R, "fit_budget") else im
     r(im, scale=a.scale, color_fix=not a.no_color_fix).save(a.out)
     print(f"{a.out} {round(time.time() - t0, 1)} s", flush=True)
 

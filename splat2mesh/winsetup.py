@@ -323,10 +323,11 @@ def install_iris(mode: str = "cpu-encoder"):
     # inference imports neither
     run([uv(), "pip", "install", "--python", py, *IRIS_DEPS], c)
     run([uv(), "pip", "install", "--python", py, "--no-deps", "-e", d], c)
-    progress(55, c, "weights: Iris-3B Turbo and Qwen3-VL-4B (~14 GB)")
+    progress(55, c, "weights: Iris-3B Turbo, its restorer and Qwen3-VL-4B (~26 GB)")
     script = f"""
 from huggingface_hub import snapshot_download
 snapshot_download("speridlabs/iris-3b", allow_patterns=["turbo/*"], local_dir=r"{d / 'weights'}")
+snapshot_download("speridlabs/iris-3b", allow_patterns=["upscaler/*"])     # the restorer: the detail pass
 snapshot_download("Qwen/Qwen3-VL-4B-Instruct")
 print("weights ok")
 """

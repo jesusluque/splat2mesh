@@ -79,6 +79,14 @@
         <textarea id="batch_prompts" rows="8"></textarea></label>
       <label data-when-batch="images">Pictures <input id="batch_images" type="file" accept="image/*" multiple></label>
     </div>
+    <div data-when-detail>
+      <label>Detail before Idol (Iris-3B restorer, at the picture's own size) <select id="detail">
+        <option value="all" selected>whole picture, then the faces (eyes, lashes, hair, stitching…)</option>
+        <option value="faces">only the faces (DeepSeek finds them)</option>
+        <option value="off">off</option></select></label>
+      <p class="hint">Idol works at 1024 px, so an upscale gives it nothing; the restorer adds sharper detail inside the same
+        pixels. About 4 minutes; needs Iris-3B installed locally.</p>
+    </div>
   </div>
 
   <div class="step" data-step="splat3d">
