@@ -60,7 +60,7 @@ auto_items = []
 for c in sorted({c for c, _ in items if _libm(c).get("transmission", 0) > 0}):
     if f"the {c}" not in [t for _, t in items]:
         items.append((c, f"the {c}")); auto_items.append((c, f"the {c}"))
-tag = asset.resolve().as_posix().replace("/", "_")[-60:]
+tag = re.sub(r"[^\w.-]", "_", asset.resolve().as_posix())[-60:]   # a folder name on any system (no "C:")
 from splat2mesh.remote import Eneas
 job = Eneas(tag)                                    # host and paths from splat2mesh.config [eneas]
 reuse = "--reuse-masks" in sys.argv and (asset / "mat" / MASKS).exists()
