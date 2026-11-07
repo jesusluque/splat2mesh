@@ -25,6 +25,13 @@ for 8 GB GPUs, all on the GPU, or the online Space). For a picture, the file (.p
 pictures, .jpg for photos: Idol frames them differently); for a splat, the .ply with Idol's camera and input
 picture. A batch takes one sentence per line, or several pictures.
 
+Iris-3B Turbo was distilled at about one megapixel in seven aspect buckets (1024×1024, 896×1200, 896×1344,
+752×1344 and their landscape transposes); larger sizes lose quality. The most detail Idol can get is therefore the
+object filling the frame in the bucket of its shape: a tall lantern in 896×1200 put 286 000 pixels on the object
+against 204 000 at 1024×1024 with the same prompt. **Fill the frame** (on by default) adds that request to the
+sentence when it does not say it. Upscaling the picture first (the Iris restorer) does not help: Idol reads the
+invented detail as structure ([multiview.md](multiview.md)).
+
 <img src="img/app/2_input.png" width="100%">
 
 **3. 3D** — Idol's seeds and the number of gaussians. With more than one seed, each sample is rendered from four
