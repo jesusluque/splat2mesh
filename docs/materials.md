@@ -279,8 +279,11 @@ without a mesh at any step (not even a hidden one):
 
 Path traced, the dragon made this way matches the mesh-based `gs_glass` result (the crystal refracts as solid lilac
 glass). What a mesh still gives that this does not: athenea's light **transfer** for the raster/web lens is baked by
-`mesh2splat` against a mesh only, so in raster the mesh-free crystal reads as chrome; the web keeps the crystal as
-Idol captured it. Baking a transfer for a cloud with no mesh would be a new athenea command.
+`mesh2splat` against a mesh only, so in raster a fully covering mesh-free crystal reads as chrome. For the browser,
+`athenea_splat --raster-glass` writes the solid at athenea's raster cover instead (0.12: seen through, bent once
+at the face it enters), and the web adds a faint veil of the colour Idol captured (the crystal's own gaussians at a
+quarter of their opacity, not relit) for the tint and the facets: a see-through lilac crystal, still with no mesh.
+A transfer baked on a cloud with no mesh is being added to athenea.
 
 ## 11. Web gallery
 
