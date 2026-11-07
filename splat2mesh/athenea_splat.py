@@ -12,6 +12,7 @@ Then:  athenea stage OUT.usda ... --technique rt   (transmitting gaussians refra
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -21,7 +22,50 @@ from .ply import read_vertex
 SH_C0 = 0.28209479177387814
 
 
-def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False) -> dict:
+def _quat_from_frames(t1, t2, n):
+    """Rotation matrices with columns (t1, t2, n) → quaternions w, x, y, z."""
+    R = np.stack([t1, t2, n], -1)                       # [N, 3, 3], columns
+    w = np.sqrt(np.clip(1 + R[:, 0, 0] + R[:, 1, 1] + R[:, 2, 2], 1e-12, None)) / 2
+    x = (R[:, 2, 1] - R[:, 1, 2]) / (4 * w)
+    y = (R[:, 0, 2] - R[:, 2, 0]) / (4 * w)
+    z = (R[:, 1, 0] - R[:, 0, 1]) / (4 * w)
+    q = np.stack([w, x, y, z], 1)
+    return q / np.linalg.norm(q, axis=1, keepdims=True)
+
+
+def glass_surfels(asset_dir, xyz, q, scl, op, sel_glass, tol_voxels: float = 2.5):
+    """Idol leaves glass as a haze: thousands of faint gaussians through a shell centimetres thick, which a
+    refracting renderer reads as smoke. Keep only the glass gaussians on the mesh's surface and make them surfels:
+    the surface normal (athenea:splat:normal), flat along it, wide enough to close the surface, nearly opaque.
+    Returns (keep mask over all gaussians, normals for the kept glass ones) and edits q, scl, op in place."""
+    from scipy.spatial import cKDTree
+    from .materials import _raster
+    from PIL import Image
+    asset = Path(asset_dir)
+    R = Image.open(asset / "basecolor.png").size[0]
+    pos, nrm, mask = _raster(asset, R)
+    P, N = pos[mask], nrm[mask]
+    step = max(1, len(P) // 2_000_000); P, N = P[::step], N[::step]
+    N = N / np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-9)
+    rep = json.loads((asset / "report.json").read_text()) if (asset / "report.json").exists() else {}
+    tol = tol_voxels * float(rep.get("voxel") or 0.0025)
+    gi = np.nonzero(sel_glass)[0]
+    d, idx = cKDTree(P).query(xyz[gi])
+    on = d < tol
+    keep = np.ones(len(xyz), bool); keep[gi[~on]] = False
+    k = gi[on]; n = N[idx[on]].astype(np.float32)
+    # spacing of the kept surfels: their disc must reach the neighbours so the glass is closed
+    sp = cKDTree(xyz[k]).query(xyz[k], k=4)[0][:, 1:].mean(1) if len(k) > 4 else np.full(len(k), tol)
+    a = np.where(np.abs(n[:, 0:1]) < 0.9, np.array([[1.0, 0, 0]]), np.array([[0, 1.0, 0]]))
+    t1 = np.cross(n, a); t1 /= np.linalg.norm(t1, axis=1, keepdims=True); t2 = np.cross(n, t1)
+    q[k] = _quat_from_frames(t1, t2, n)
+    st = np.maximum(np.sort(scl[k], 1)[:, 1], 0.8 * sp)
+    scl[k] = np.stack([st, st, np.maximum(st * 0.05, 1e-5)], 1)
+    op[k] = 0.95
+    return keep, k, n
+
+
+def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False, glass_surface=None) -> dict:
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdVol, Vt
     v = read_vertex(ply)
     n = len(v)
@@ -42,6 +86,16 @@ def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False) -> di
         q = np.stack([-x, w, -z, y], 1)
     attr = lambda k, d: np.asarray(v[k], np.float32) if k in v.dtype.names else np.full(n, d, np.float32)
     metal, rough, trans, ior = attr("metallic", 0), attr("roughness", 0.5), attr("transmission", 0), attr("ior", 1.5)
+    normals = np.zeros_like(xyz); has_n = np.zeros(n, bool); thin = np.zeros(n, np.int32)
+    if glass_surface is not None and (trans > 0).any():
+        keep, k, nk = glass_surfels(glass_surface, xyz, q, scl, op, trans > 0)
+        normals[k] = nk; has_n[k] = True; thin[k] = 1
+        print(f"glass: {int((trans > 0).sum())} gaussians → {len(k)} surfels on the surface", flush=True)
+        sel_all = np.nonzero(keep)[0]
+        xyz, q, scl, op, dc = xyz[sel_all], q[sel_all], scl[sel_all], op[sel_all], dc[sel_all]
+        metal, rough, trans, ior = metal[sel_all], rough[sel_all], trans[sel_all], ior[sel_all]
+        normals, has_n, thin = normals[sel_all], has_n[sel_all], thin[sel_all]
+        n = len(xyz)
     # one prim per ior among transmitting gaussians (athenea's ior is one per prim); opaque ones in a prim of their own
     key = np.where(trans > 0, np.round(ior, 3), -1.0)
     stage = Usd.Stage.CreateNew(str(out))
@@ -74,6 +128,11 @@ def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False) -> di
                              UsdGeom.Tokens.vertex).Set(Vt.FloatArray.FromNumpy(arr[sel]))
         pv.CreatePrimvar("athenea:splat:ior", Sdf.ValueTypeNames.Float, UsdGeom.Tokens.constant).Set(
             float(k) if k > 0 else 0.0)
+        if has_n[sel].any():
+            pv.CreatePrimvar("athenea:splat:normal", Sdf.ValueTypeNames.Normal3fArray, UsdGeom.Tokens.vertex).Set(
+                Vt.Vec3fArray.FromNumpy(normals[sel].astype(np.float32)))
+            pv.CreatePrimvar("athenea:splat:thinWalled", Sdf.ValueTypeNames.IntArray, UsdGeom.Tokens.vertex).Set(
+                Vt.IntArray.FromNumpy(thin[sel]))
         groups[name] = int(len(sel))
     stage.GetRootLayer().Save()
     return {"gaussians": n, "prims": groups, "relight": have_alb}
@@ -83,8 +142,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("ply"); ap.add_argument("out"); ap.add_argument("--y-down", action="store_true")
     ap.add_argument("--radiance", action="store_true")
+    ap.add_argument("--glass-surface", default=None, metavar="ASSET_DIR",
+                    help="the mesh asset of the same splat: glass gaussians become surfels on its surface (normal, "
+                         "flat, covering, thinWalled) instead of Idol's haze")
     a = ap.parse_args()
-    print(write_splat_usd(a.ply, a.out, a.y_down, a.radiance))
+    print(write_splat_usd(a.ply, a.out, a.y_down, a.radiance, a.glass_surface))
 
 
 if __name__ == "__main__":
