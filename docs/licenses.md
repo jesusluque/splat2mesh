@@ -14,6 +14,7 @@ All permissive:
 | manifold3d, gradio_client | Apache-2.0 |
 | usd-core | Tomorrow Open Source Technology License 1.0 (Apache-2.0 based) |
 | OpenEXR | BSD-3-Clause |
+| imageio-ffmpeg | BSD-2-Clause; the ffmpeg executable it ships is a GPL build, run as a separate program to encode the videos (only where no ffmpeg is on the PATH, e.g. Windows) |
 
 PLY files are read and written by `splat2mesh/ply.py`; the GPL-licensed `plyfile` package is no longer used.
 

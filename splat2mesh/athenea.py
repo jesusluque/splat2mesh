@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -210,6 +211,18 @@ def stage(scene, out_dir, *, turntable: int = 0, cameras=None, eye=None, target=
     tech = ["--technique", technique] + (["--path-bounces", str(bounces), "--path-total", str(spp)]
                                          + (["--denoise"] if denoise else []) if technique == "rt" else [])
     args = [_bin(), "stage", str(scene), "--focal", str(FOCAL), "--size", f"{size}x{size}", *tech]
+    if (turntable or cameras) and not _supports("--turntable"):
+        # an athenea without --turntable/--cameras (the 0.3.0 release): one run a view, the scene loaded each time
+        if turntable:
+            c, e = np.asarray(target, float), np.asarray(eye, float) - np.asarray(target, float)
+            cameras = []
+            for i in range(turntable):                  # about +Y, as athenea's own --turntable turns
+                a = 2 * math.pi * i / turntable; ca, sa = math.cos(a), math.sin(a)
+                r = np.array([ca * e[0] + sa * e[2], e[1], -sa * e[0] + ca * e[2]])
+                cameras.append((f"f_{i:04d}", (c + r).tolist(), list(target), list(up)))
+        run_script([[str(x) for x in args] + ["--eye", *map(str, ce), "--target", *map(str, ct), "--up", *map(str, cu),
+                                             "-o", str(d / f"{n}.exr")] for n, ce, ct, cu in cameras], log=log)
+        return [d / f"{n}.exr" for n, *_ in cameras]
     if turntable:
         args += ["--eye", *map(str, eye), "--target", *map(str, target), "--up", *map(str, up),
                  "--turntable", str(turntable), "-o", str(d) + "/"]
@@ -227,8 +240,31 @@ def stage(scene, out_dir, *, turntable: int = 0, cameras=None, eye=None, target=
     return [d / f"{n}.exr" for n in names]
 
 
+def ffmpeg() -> str:
+    """ffmpeg on PATH, else the one the imageio-ffmpeg package ships (Windows has none)."""
+    w = shutil.which("ffmpeg")
+    if w:
+        return w
+    import imageio_ffmpeg
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+_HELP: dict = {}
+
+
+def _supports(flag: str) -> bool:
+    """Whether this athenea's stage command knows a flag (older releases lack --turntable / --cameras)."""
+    if "stage" not in _HELP:
+        try:
+            _HELP["stage"] = subprocess.run([str(_bin()), "stage", "--help"], capture_output=True, text=True,
+                                            env=athenea_env(), timeout=60).stdout
+        except Exception:
+            _HELP["stage"] = ""
+    return flag in _HELP["stage"]
+
+
 def encode(frames_glob_pattern: str, out_mp4, fps: int = 24):
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-framerate", str(fps), "-i", frames_glob_pattern,
+    subprocess.run([ffmpeg(), "-loglevel", "error", "-y", "-framerate", str(fps), "-i", frames_glob_pattern,
                     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-movflags", "+faststart", str(out_mp4)],
                    check=True)
 

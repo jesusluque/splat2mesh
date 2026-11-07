@@ -302,7 +302,7 @@ def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False, glass
         metal, rough, trans, ior = metal[sel_all], rough[sel_all], trans[sel_all], ior[sel_all]
         normals, has_n, thin = normals[sel_all], has_n[sel_all], thin[sel_all]
         n = len(xyz)
-    if glass_surface is None and "nx" in v.dtype.names:
+    if glass_surface is None and "loose" in v.dtype.names:   # finished by gs_finish (Idol PLYs carry zero nx..nz)
         # finished on the splat itself (gs_finish): normals from its own depth renders, floaters flagged, glass as
         # surfels on the glass gaussians' own closed surface. No mesh anywhere
         normals = np.stack([v["nx"], v["ny"], v["nz"]], 1).astype(np.float32)
@@ -335,6 +335,19 @@ def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False, glass
         dc, metal, rough, trans, ior = dc[src], metal[src], rough[src], trans[src], ior[src]
         has_n = np.ones(len(xyz), bool); n = len(xyz)
         print(f"floaters dropped: {int(drop.sum())}", flush=True)
+    if glass_surface is None and "loose" not in v.dtype.names:
+        # no finish pass: still leave out the gaussians wider than BIG × the object's radius (background or a veil
+        # Idol left, which shows as a disc under the object), as gs_finish does
+        from .gs_finish import BIG
+        lo_, hi_ = np.percentile(xyz, 0.5, 0), np.percentile(xyz, 99.5, 0)
+        big = scl.max(1) > BIG * float(np.linalg.norm(hi_ - lo_) / 2)
+        if big.any():
+            k_ = ~big
+            xyz, q, scl, op, dc = xyz[k_], q[k_], scl[k_], op[k_], dc[k_]
+            metal, rough, trans, ior = metal[k_], rough[k_], trans[k_], ior[k_]
+            normals, has_n, thin = normals[k_], has_n[k_], thin[k_]
+            n = len(xyz)
+            print(f"oversized gaussians left out: {int(big.sum())}", flush=True)
     # one prim per ior among transmitting gaussians (athenea's ior is one per prim); opaque ones in a prim of their own
     key = np.where(trans > 0, np.round(ior, 3), -1.0)
     stage = Usd.Stage.CreateNew(str(out))

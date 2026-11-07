@@ -12,3 +12,4 @@ usd-core
 pillow
 OpenEXR
 gradio_client
+imageio-ffmpeg

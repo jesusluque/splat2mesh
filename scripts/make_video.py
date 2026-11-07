@@ -77,7 +77,8 @@ def main():
             if k < FADE:
                 f = Image.blend(Image.new("RGB", (W, H), (0, 0, 0)), f, (k + 1) / FADE)
             f.save(tmp / f"v_{n:05d}.png"); n += 1
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-framerate", str(FPS), "-i", str(tmp / "v_%05d.png"),
+    from splat2mesh.athenea import ffmpeg
+    subprocess.run([ffmpeg(), "-loglevel", "error", "-y", "-framerate", str(FPS), "-i", str(tmp / "v_%05d.png"),
                     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-movflags", "+faststart", out], check=True)
     print(f"wrote {out}: {n} frames, {n / FPS:.1f} s")
 
