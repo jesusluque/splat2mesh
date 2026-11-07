@@ -131,6 +131,8 @@ def athenea_env() -> dict:
                 sh = str(d); break
     if sh:
         env["ATHENEA_SHADER_DIR"] = os.path.expanduser(sh)
+    if WINDOWS and not env.get("CUDA_PATH") and (TOOLS / "cuda" / "bin").exists():
+        env["CUDA_PATH"] = str(TOOLS / "cuda")         # nvrtc for athenea's shaders, from the installer
     return env
 
 

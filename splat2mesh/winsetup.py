@@ -214,8 +214,19 @@ def install_athenea():
     exe = next(dst.rglob("athenea.exe"), None)
     if exe is None:
         raise RuntimeError("athenea: athenea.exe not found in the release")
+    # athenea compiles its CUDA shaders at run time with NVIDIA's nvrtc, part of the CUDA Toolkit, which a clean
+    # Windows does not have: NVIDIA's own redistributable wheels give nvrtc, the runtime and the headers, laid out
+    # as a minimal CUDA folder (athenea_env points CUDA_PATH at it)
+    progress(90, c, "CUDA compiler for athenea's shaders (nvrtc, ~100 MB)")
+    pk, cu = TOOLS / "cuda-pkgs", TOOLS / "cuda"
+    run([uv(), "pip", "install", "--quiet", "--target", pk, "nvidia-cuda-nvrtc-cu12", "nvidia-cuda-runtime-cu12"], c)
+    (cu / "bin").mkdir(parents=True, exist_ok=True); (cu / "include").mkdir(exist_ok=True)
+    for dll in pk.rglob("*.dll"):
+        shutil.copy2(dll, cu / "bin" / dll.name)
+    for inc in [d for d in pk.rglob("include") if d.is_dir()]:
+        shutil.copytree(inc, cu / "include", dirs_exist_ok=True)
     progress(95, c, "checking")
-    run([exe, "info"], c, check=False)
+    run([exe, "info"], c, check=False, env={"CUDA_PATH": str(cu)})
     write_user_config({"athenea": {"bin": str(exe)}})
     progress(100, c, f"ready: {exe}")
 
