@@ -138,10 +138,12 @@
     const orbit = new OrbitControls(camera, renderer.domElement);
     orbit.target.copy(c); orbit.enableDamping = true; orbit.minDistance = rad * 0.3; orbit.maxDistance = rad * 8; orbit.update();
 
+    // the HDRI strip is always there (also in the gallery card, gui=0); the settings panel only on the full page
+    let hdriCtl = null;
+    const picker = hdriPicker({ names: hdris, current: state.hdri, params, onPick: (name) => { state.hdri = name; hdriCtl?.updateDisplay(); setHdri(name); } });
     if (params.get("gui") !== "0") {
       const gui = new GUI({ title: "relight" });
-      const hdriCtl = gui.add(state, "hdri", hdris).onChange((name) => { picker.select(name); setHdri(name); });
-      const picker = hdriPicker({ names: hdris, current: state.hdri, params, onPick: (name) => { state.hdri = name; hdriCtl.updateDisplay(); setHdri(name); } });
+      hdriCtl = gui.add(state, "hdri", hdris).onChange((name) => { picker.select(name); setHdri(name); });
       gui.add(state, "rotation", -180, 180, 1).name("dome rotation").onChange(applySky);
       gui.add(state, "intensity", 0, 4, 0.05).name("dome intensity").onChange(applySky);
       gui.close();
