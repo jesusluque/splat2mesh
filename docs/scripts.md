@@ -130,6 +130,7 @@ was made.
 | `config.py` | the one configuration: athenea, GPU lock, Idol/ENEAS hosts, Iris, DeepSeek, HDRI, notifier ([setup](setup.md)) |
 | `athenea.py` | athenea from Python and its CLI: splat views, stages with `--turntable`/`--cameras`, EXR → PNG |
 | `athenea_splat.py` | a splat with per-gaussian materials → relightable USD for athenea |
+| `gs_glass.py` | refracting glass on a splat: the material's closed solid → athenea `mesh2splat --transfer` → scene |
 | `remote.py` | Idol and ENEAS locally, on a Linux host or on a Windows host (ENEAS in WSL) |
 | `deepseek.py` | DeepSeek vision client (JSON answers) |
 | `direct.py`, `geometry.py`, `texture.py`, `usd_export.py`, `rerender.py` | meshing, UVs, bake, USD, QA ([pipeline](pipeline.md)) |

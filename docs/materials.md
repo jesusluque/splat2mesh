@@ -227,6 +227,23 @@ splat) it is relit correctly:
   mesh projected to each gaussian, and a one-colour glass its measured tint per crossing (√tint).
 - One prim per ior among the transmitting gaussians (athenea's ior is per prim); Y-down is turned in the data.
 
+**Refracting glass** (`python -m splat2mesh.gs_glass SPLAT_MATERIALS.ply OUT --y-down --opaque OPAQUE.usdc`). The
+surfels above refract approximately; for glass that refracts like glass in a path tracer, each transparent material
+is rebuilt:
+
+1. its own closed solid from its gaussians only (their opacity thickened ×12, since Idol's glass is faint),
+   marching cubes, decimated to 40 000 faces and Taubin-smoothed. A piece cut out of the object's single mesh is
+   open where other parts touch it, and rays entering there came out as black patches;
+2. a stage with that mesh and a MaterialX `standard_surface`: transmission 1, the library's IOR and roughness, the
+   transmission colour from the glass gaussians' own hue;
+3. athenea `mesh2splat --transfer` on it: surfels on the surface with normals, cover and the light transfer;
+4. `scene.usda`: the relit opaque splat plus the glass clouds.
+
+Path traced (athenea `--technique rt`) the crystal dragon's crystal is solid lilac glass that refracts what is behind
+it. athenea's raster lens (and the browser viewer's, the same code) does not trace: it bends a ray over a sphere
+estimated from each gaussian's curvature and reads the dome, which works on a ball but not on a cluster of prisms
+(it shows blue swirls). The web gallery therefore shows the crystal as Idol captured it.
+
 For the browser, `usd-athc` (from sparkwebgpu) converts each prim to `.athc`; `web/splat.html` loads them (several
 clouds, each with its ior) and relights them live with athenea's code in Spark WebGPU (`web/README.md`).
 
