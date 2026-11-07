@@ -13,7 +13,7 @@ CLI:
     python -m splat2mesh.athenea turntable ASSET.usda OUT.mp4 [--frames 96] [--size 1080] [--technique raster|rt]
            [--spp 96] [--elev 15] [--start-deg 0] [--dist 3.3] [--hdri FILE] [--grey 0.8]
     python -m splat2mesh.athenea splat-turntable SPLAT.ply OUT.mp4 [--frames 96] [--elev 15] [--y-down]
-    python -m splat2mesh.athenea view ASSET.usda OUT.png MX MY MZ [--size 1024] [--spp 96] [--technique rt|raster]
+    python -m splat2mesh.athenea view ASSET.usda OUT.png MX,MY,MZ [--size 1024] [--spp 96] [--technique rt|raster]
     python -m splat2mesh.athenea render-splats SPLAT.ply CAMERAS.txt OUT_DIR [--y-down] [-- extra athenea flags]
 """
 from __future__ import annotations
@@ -262,7 +262,7 @@ def main():
     s.add_argument("--frames", type=int, default=96); s.add_argument("--elev", type=float, default=15.0)
     s.add_argument("--start-deg", type=float, default=0.0); s.add_argument("--y-down", action="store_true")
     v = sp.add_parser("view"); v.add_argument("asset"); v.add_argument("out")
-    v.add_argument("eye", nargs=3, type=float, help="eye in bounding radii from the centre (x y z)")
+    v.add_argument("eye", help="eye in bounding radii from the centre: X,Y,Z (commas: negative values are fine)")
     v.add_argument("--size", type=int, default=1024); v.add_argument("--spp", type=int, default=96)
     v.add_argument("--technique", default="rt", choices=["raster", "rt"]); v.add_argument("--hdri", default=str(HDRI))
     r = sp.add_parser("render-splats"); r.add_argument("ply"); r.add_argument("cameras"); r.add_argument("out")
@@ -271,7 +271,7 @@ def main():
     if a.cmd == "turntable":
         print(turntable(a.asset, a.out, a.frames, a.size, a.technique, a.spp, a.elev, a.start_deg, a.dist, a.hdri, a.grey))
     elif a.cmd == "view":
-        print(view(a.asset, a.out, a.eye, a.size, a.technique, a.spp, a.hdri))
+        print(view(a.asset, a.out, [float(x) for x in a.eye.split(",")], a.size, a.technique, a.spp, a.hdri))
     elif a.cmd == "splat-turntable":
         print(splat_turntable(a.ply, a.out, a.frames, a.elev, a.y_down, a.start_deg))
     else:
