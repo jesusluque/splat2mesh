@@ -211,7 +211,8 @@ more textured planes (see `splat2mesh/glass.py`). Check it with `tests/glass_sel
 ## 8. When something goes wrong
 
 - **`"ok": false` with an `error`**: the message names the step (Idol, render, mesh).
-- **Object upside down in `compare.png`**: rerun with `--y-down` (or `--y-up` for an Idol splat that is already upright).
+- **Object upside down**: for a `.ply` input, rerun with `--y-down` (COLMAP and Idol splats are Y-down); for a
+  picture input, `--y-up` overrides the Y-down default.
 - **Low PSNR on shiny objects**: expected; the texture is one fixed colour and cannot reproduce
   reflections that change with the viewing angle.
 - **Many UV islands**: try `--smooth 1`; artist-clean UVs need quad remeshing.

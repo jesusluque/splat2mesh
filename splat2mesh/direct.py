@@ -76,7 +76,7 @@ def opacity_field(xyz, scale, inv, alpha, res: int = 320, pad: float = 0.05, max
 def extract(occ, lo, step, level: float = 0.5, close_iters: int = 3, blur: float = 0.8,
             fill: bool = True) -> trimesh.Trimesh:
     """Solid = (occ > level), closed (bridges gaps between flat gaussians), interior cavities filled,
-    only the largest connected solid kept; the surface is taken on a lightly blurred solid so it stays
+    pieces under 2 % of the largest dropped; the surface is taken on a lightly blurred solid so it stays
     smooth, then marching cubes. Result: one closed shell."""
     from scipy import ndimage as ndi
     from skimage.measure import marching_cubes

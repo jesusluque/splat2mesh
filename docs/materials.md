@@ -38,7 +38,8 @@ glass: the bulb; brass: the screw base
 porcelain (glazed): the cat's body; gold: the bell, the coin; urushi lacquer: the red collar
 ```
 
-**The prompt is the authority** on the specific material inside a family. If the prompt says brass and the model
+**The prompt is the authority** on the specific material inside a family (applied by `flow_batch.py`; running
+`describe_materials.py` or `materials_eneas3d.py` alone does not apply it). If the prompt says brass and the model
 says gold, it becomes brass. If the model names a family the prompt never mentions, it is replaced by the prompt's
 unused material (a bowl described as porcelain that the prompt calls urushi lacquer becomes lacquer).
 
@@ -114,13 +115,14 @@ F0 colour, transmission, subsurface, thin-walled and match keywords. Values are 
 
 `materials.finish_maps` and the functions next to it, so glossy objects look finished:
 
-- **Polished metals** take the library's F0 colour times only the *fine* luminance detail of the baked texture
-  (a high-pass at 8 texels, darkening limited to ×0.75). Hammering and engraving stay; the reflections that the
-  splat froze into its colour go. Matte metals keep 35 % of the texture detail. Dark strokes up to 4 texels wide
-  are read as ink and stay non-metallic.
-- **Polish from the texture.** A material whose range can reach roughness 0.45 or less, with more than 3 %
-  pale-highlight texels, is polished: roughness goes 0.1 below its range and the highlights are removed from the
-  base colour.
+- **Metals** take the library's F0 colour times only the *fine* luminance detail of the baked texture (a high-pass
+  of log-luminance at 8 texels, darkening limited to ×0.75). Hammering and engraving stay; the reflections that the
+  splat froze into its colour go. Dark strokes up to 4 texels wide are read as ink and stay non-metallic.
+- **Polish from the texture.** Some materials can be satin or polished (leather, varnished wood, satin paint): a
+  non-metal, non-transparent material whose default roughness is above 0.4 but whose range reaches 0.45 or less.
+  If such a piece is one colour (chroma above 15, a\*b\* spread under 10), covers more than 2 000 texels and has
+  more than 3 % pale-highlight texels, it is polished: roughness becomes the low end of its range minus 0.1 (at
+  least 0.25), and the highlights are removed from the base colour.
 - **Highlight removal** on glossy dielectrics (porcelain, lacquer, paint): the baked highlights are taken out of the
   base colour, since the renderer's lights put them back.
 - **Shading normals** for glossy parts come from bilateral face-normal filtering (60 passes, edges above ~45° kept);

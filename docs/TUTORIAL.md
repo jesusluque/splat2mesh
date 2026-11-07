@@ -40,7 +40,8 @@ The GPU pieces and how the code reaches them are in [setup.md](setup.md):
 ## 2. One object, one command
 
 ```sh
-.venv/bin/python scripts/splat2usd.py lucky_cat.png --direct --gaussians 524288 --out out/demo
+mkdir -p pictures && cp lucky_cat.png pictures/00.png        # the materials flow (step 3) wants numbered names
+.venv/bin/python scripts/splat2usd.py pictures/ --direct --gaussians 524288 --out out/demo
 ```
 
 1. **Idol** turns the picture into a splat. It invents the hidden sides: use a white background.

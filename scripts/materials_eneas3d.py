@@ -1,4 +1,4 @@
-"""Semi-automatic 3D materials: description "material: part, part; ..." → ENEAS on a 24-view orbit of the textured
+"""Semi-automatic 3D materials: description "material: part, part; ..." → ENEAS on a 16-view orbit of the textured
 mesh (tracked across views) → masks back-projected to texels and voted → roughness/metallic maps in the USD.
 
     python scripts/materials_eneas3d.py ASSET_DIR INPUT_IMAGE "gold: the gold coin, the gold bell; porcelain: the body"

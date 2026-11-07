@@ -1,5 +1,5 @@
 """Coherent materials flow for a set of direct-mode assets:
-   Qwen3-VL describes parts by material (image + Iris prompt) → ENEAS tracks each part on a 24-view orbit (ixwin WSL)
+   Qwen3-VL describes parts by material (image + Iris prompt) → ENEAS tracks each part on a 16-view orbit (ENEAS host)
    → masks voted per texel → library PBR (roughness/metallic) + measured base colour → USD.
 
     python scripts/flow_batch.py SRC_DIR OUT_DIR PROMPTS.txt [--only 00,03]

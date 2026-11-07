@@ -15,7 +15,7 @@ uv pip install --python .venv/bin/python -r requirements.txt
 ```
 
 `tests/synthetic.py` prints the mesh statistics and the errors against the known object; on a correct install:
-0 open edges, 0 non-manifold edges, `chamfer_mean` ≈ 0.0023 (0.2 % of the object size), `texture_psnr_db` ≈ 31.
+0 open edges, 0 non-manifold edges, `chamfer_mean` ≈ 0.0023, `texture_psnr_db` ≈ 31.
 
 This is enough for **direct mode on an existing splat**:
 
@@ -37,11 +37,11 @@ Each one is optional; a stage that needs a missing piece fails with the step's n
 
 ### The view layout expected by the render path
 
-One folder per asset, as written by `scripts/render_athenea.sh`:
+One folder per asset; `scripts/athenea_cams.py` writes the cameras and `scripts/render_athenea.sh` the views:
 
 ```
 render/
-├── cameras.json          OpenCV convention: per view K, world-to-camera R|t, width, height
+├── cameras.json          OpenCV convention: shared intrinsics, per-view world-to-camera R|t
 ├── views/v000.png        colour
 ├── views/v000_mask.png   object mask
 └── views/v000.exr        depth in channel Z   (or v000_depth.npy)
@@ -61,7 +61,16 @@ render/
 
 On a Windows Idol host the scripts expect the SDK in `C:\splat2mesh\idol-sdk` with its Python at
 `C:\splat2mesh\venv`; on Linux, in `~/splat2mesh_eneas/idol-sdk/.venv`. These paths are constants at the top of
-`scripts/splat2usd.py` and `scripts/gen_views.py`.
+`scripts/splat2usd.py`.
+
+Not everything reads these variables yet. Hard-coded:
+
+- `scripts/gen_views.py` (used by `--views` and `--multiview gen`) and the seed and probe scripts use the Windows
+  host `ixwin-tb` and its paths, whatever `SPLAT2MESH_IDOL_HOST` says;
+- `scripts/flow_batch.py` and `scripts/seed_views.sh` call the GPU lock at `~/luc/athenea-gpu/shared.sh` directly;
+- the batch scripts (`night_*.sh`, `redo_*.sh`) name the development hosts.
+
+Change those constants for another setup.
 
 ### Offline Idol host
 
