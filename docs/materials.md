@@ -283,7 +283,12 @@ glass). What a mesh still gives that this does not: athenea's light **transfer**
 `athenea_splat --raster-glass` writes the solid at athenea's raster cover instead (0.12: seen through, bent once
 at the face it enters), and the web adds a faint veil of the colour Idol captured (the crystal's own gaussians at a
 quarter of their opacity, not relit) for the tint and the facets: a see-through lilac crystal, still with no mesh.
-A transfer baked on a cloud with no mesh is being added to athenea.
+athenea's `splat-transfer` now bakes that transfer on a cloud with no mesh (glass through itself, its exit face,
+and per gaussian whether the lens is a ball or a slab), and `athenea_splat` writes the surfels' curvature from the
+implicit field's Hessian (`primvars:athenea:splat:curvature`). Compressed with `athc-convert --cpca 16,48` the glass
+fits the web (≈10 MB). In the browser it refracts, but the foot of the dragon's crystal, rebuilt as rounded lumps
+from Idol's haze, shows rings (each lump is a small lens): the gallery keeps the translucent version, and the test
+page `splat.html?model=crystal_dragon_tx` shows the refracting one.
 
 ## 11. Web gallery
 
