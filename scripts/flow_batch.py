@@ -34,8 +34,48 @@ for d in items:
                             "--no-antialias", "--out", str(tmp)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             shutil.rmtree(o); shutil.copytree(tmp / d.name / "usd", o)
             print(d.name, "→ render path", flush=True)
-# 2) descriptions with Qwen3-VL (one model load for all)
+# 2) descriptions: DeepSeek (vision) first; Qwen3-VL-4B locally when DeepSeek is not reachable
+def describe_ds(image, prompt, max_parts=12):
+    import re
+    from PIL import Image
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from gen_views import ds, img_url
+    q = ("You prepare inputs for a segmentation model that finds one object part per short phrase. List the visible "
+         "PARTS of this object grouped by MATERIAL. Rules: use only these material names: " + ", ".join(LIB) +
+         f". Each part is a short noun phrase starting with 'the' that a segmenter can find (one part per phrase, "
+         f"never two joined with 'and'). 3 to {max_parts} parts; cover the whole object: first the parts that make up "
+         "most of its visible surface (body, clothing, footwear, skin, hair, large panels or boards), then smaller "
+         "details. List visible glass or transparent parts as their own part. A painted figurine or model: name the "
+         "material each painted part represents (steel, wood, leather, skin, hair / fur...), not the paint. Each part "
+         "once." + (f' The image was generated from this description: "{prompt}".' if prompt else "") +
+         ' Answer JSON: {"materials": [{"material": ..., "parts": ["the ...", ...]}]}')
+    ans = ds([{"type": "image_url", "image_url": {"url": img_url(Image.open(image))}}, {"type": "text", "text": q}])
+    groups, seen = {}, set()
+    for g in ans.get("materials", []):
+        mat = str(g.get("material", "")).strip().lower()
+        if mat not in LIB:
+            continue
+        for p_ in g.get("parts", []):
+            p_ = str(p_).strip().strip(".").lower()
+            p_ = p_ if p_.startswith("the ") else "the " + p_
+            if p_ in seen or len(seen) >= max_parts:
+                continue
+            seen.add(p_); groups.setdefault(mat, []).append(p_)
+    if not groups:
+        raise ValueError("empty description")
+    return "; ".join(f"{m}: {', '.join(ps)}" for m, ps in groups.items())
+
+
+from splat2mesh.materials import LIB
+DESCRIBED_BY = {}
 need = [d for d in items if not (out / d.name / "materials.txt").exists()]
+for d in list(need):
+    try:
+        (out / d.name / "materials.txt").write_text(describe_ds(d / "idol_input.png", prompts[int(d.name)]))
+        DESCRIBED_BY[d.name] = "deepseek"; need.remove(d)
+        print(d.name, "described by DeepSeek", flush=True)
+    except Exception as e:
+        print(d.name, "DeepSeek description failed, Qwen3-VL instead:", e, flush=True)
 if need:
     imgs = [str(d / "idol_input.png") for d in need]
     pf = out / "_prompts.txt"; pf.write_text("\n".join(prompts[int(d.name)] for d in need))
@@ -126,7 +166,8 @@ for d in items:
                 if len(missing) == 1:
                     m = missing[0]
         new.append(f"{m}: {things.strip()}")
-    f.write_text(part_materials_from_prompt(complete_parts("; ".join(new), d / "idol_input.png"), pr))
+    full = "; ".join(new) if DESCRIBED_BY.get(d.name) == "deepseek" else complete_parts("; ".join(new), d / "idol_input.png")
+    f.write_text(part_materials_from_prompt(full, pr))
 # 3) ENEAS 3D + PBR per object
 summary = {}
 for d in items:
