@@ -2,7 +2,8 @@
    Qwen3-VL describes parts by material (image + Iris prompt) → ENEAS tracks each part on a 16-view orbit (ENEAS host)
    → masks voted per texel → library PBR (roughness/metallic) + measured base colour → USD.
 
-    python scripts/flow_batch.py SRC_DIR OUT_DIR PROMPTS.txt [--only 00,03] [--gs]
+    python scripts/flow_batch.py SRC_DIR OUT_DIR PROMPTS.txt [--only 00,03] [--gs] [--reuse-masks]
+--reuse-masks: keep the ENEAS masks already saved for the same phrases; ENEAS runs only for new ones.
 --gs: parts segmented on renders of the splat and voted per gaussian (splat2mesh/gs_materials.py); the mesh inherits
 them. The splat with per-gaussian materials is written to OUT_DIR/NN/usd/mat/splat_materials.ply.
 SRC_DIR/NN/{NN.ply, idol_input.png} as written by splat2usd; OUT_DIR/NN/usd is (re)built with direct mode.
@@ -44,7 +45,7 @@ def describe_ds(image, prompt, max_parts=12):
          "PARTS of this object grouped by MATERIAL. Rules: use only these material names: " + ", ".join(LIB) +
          f". Each part is a short noun phrase starting with 'the' that a segmenter can find (one part per phrase, "
          f"never two joined with 'and'). 3 to {max_parts} parts; cover the whole object: first the parts that make up "
-         "most of its visible surface (body, clothing, footwear, skin, hair, large panels or boards), then smaller "
+         "most of its visible surface (body, clothing, footwear, hands, face, hair, large panels or boards), then smaller "
          "details. List visible glass or transparent parts as their own part. A painted figurine or model: name the "
          "material each painted part represents (steel, wood, leather, skin, hair / fur...), not the paint. Each part "
          "once." + (f' The image was generated from this description: "{prompt}".' if prompt else "") +
@@ -174,7 +175,8 @@ for d in items:
     desc = (out / d.name / "materials.txt").read_text().strip()
     t = time.time()
     p = subprocess.run([sys.executable, str(ROOT / "scripts/materials_eneas3d.py"), str(out / d.name / "usd"),
-                        str(d / "idol_input.png"), desc] + (["--gs", str(d / f"{d.name}.ply")] if "--gs" in sys.argv else []),
+                        str(d / "idol_input.png"), desc] + (["--gs", str(d / f"{d.name}.ply")] if "--gs" in sys.argv else [])
+                       + (["--reuse-masks"] if "--reuse-masks" in sys.argv else []),
                        capture_output=True, text=True)
     (out / d.name / "materials.log").write_text(p.stdout + p.stderr)
     from splat2mesh.interior import extract_interior          # filaments, wicks… inside glass parts
