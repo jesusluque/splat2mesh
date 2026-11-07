@@ -72,14 +72,11 @@ def render_orbit_gs(ply, out_dir, n: int = 16, elevation: float = 15.0, y_down: 
     with open(out / "cameras.txt", "w") as fo:
         for vv in views:
             fo.write(" ".join([vv["name"]] + [f"{x:.7g}" for x in vv["eye"] + vv["target"] + vv["up"]]) + "\n")
-    lock = os.environ.get("SPLAT2MESH_GPU_LOCK", str(Path.home() / "luc/athenea-gpu/shared.sh"))
-    subprocess.run(["bash", lock, "bash", str(ROOT / "scripts/render_athenea.sh"), str(ply), str(out)]
-                   + (["--rotate-x", "180"] if y_down else []), check=True, stdin=subprocess.DEVNULL,
-                   capture_output=True)
+    from .athenea import render_splats
+    render_splats(ply, [(vv["name"], vv["eye"], vv["target"], vv["up"]) for vv in views], out, size=SIZE,
+                  rotate_x180=y_down, background=(1.0, 1.0, 1.0))
     for vv, fr in zip(views, frames):
-        subprocess.run(["oiiotool", str(out / "views" / f"{vv['name']}.exr"), "--ch", "R,G,B,A", "--colorconvert",
-                        "linear", "sRGB", "--pattern", "constant:color=1,1,1,1", f"{SIZE}x{SIZE}", "4", "--over",
-                        "-d", "uint8", "-o", str(fr)], check=True, capture_output=True)
+        Image.open(out / "views" / f"{vv['name']}.png").convert("RGB").save(fr, quality=95)
     return frames
 
 

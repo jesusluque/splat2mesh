@@ -2,7 +2,11 @@
 paths equal to the archive entry names) that the page shows with three.js' USDZLoader and that iOS opens in
 AR Quick Look; plus the source image.
 
-    python scripts/export_web.py OUTDIR NAME=ASSET_DIR[:TITLE[:SOURCE_IMAGE[:POSTER]]] [...] [--materials texture|parts]
+    python scripts/export_web.py OUTDIR NAME=ASSET_DIR[:TITLE[:SOURCE_IMAGE[:POSTER[:SPLAT.ply]]]] [...] [--materials texture|parts]
+SPLAT.ply (Idol, Y-down): written as models/NAME.splat; the viewer gets a Mesh | Splat switch.
+NAME=page:URL|TITLE|SOURCE_IMAGE|POSTER|NOTE: a card that opens a page inside it (splat.html?model=NAME: a
+relightable splat in Spark WebGPU; its models/NAME.athc and NAME.json are prepared beforehand). Every card has a
+maximize button.
 --materials texture (default): one mesh, materials per texel (transmission, roughness, metalness maps); parts: one
 mesh prim per part with its own material (faces take their centre texel's part: jagged borders on small features).
 ASSET_DIR holds asset.usda + its textures (+ report.json in it or its parent).
@@ -180,10 +184,21 @@ for _, h in HDRS:
 cards = []
 for spec in sys.argv[2:]:
     name, rest = spec.split("=", 1)
+    if rest.startswith("page:"):        # a card that opens a page of its own (e.g. splat.html?model=NAME), no mesh
+        url, title, img, poster, note = (rest[len("page:"):].split("|") + [""] * 5)[:5]
+        if poster and Path(poster).exists():
+            Image.open(poster).convert("RGB").resize((640, 640), Image.LANCZOS).save(out / "models" / f"{name}_poster.jpg", quality=86)
+        if img and Path(img).exists():
+            Image.open(img).convert("RGB").resize((512, 512), Image.LANCZOS).save(out / "models" / f"{name}_input.jpg", quality=85)
+        cards.append((name, title or name, bool(img and Path(img).exists()), {"page": url, "note": note,
+                                                                         "poster": bool(poster and Path(poster).exists())}))
+        print(name, "page", url)
+        continue
     parts = rest.split(":")
     src = Path(parts[0]); title = parts[1] if len(parts) > 1 and parts[1] else name
     img = Path(parts[2]) if len(parts) > 2 and parts[2] else None
     poster = Path(parts[3]) if len(parts) > 3 and parts[3] else None
+    splat = Path(parts[4]) if len(parts) > 4 and parts[4] else None      # the Idol splat (.ply, Y-down) for the switch
     # materials per texture (default: one mesh, transmission/roughness/metalness maps per texel, borders follow the
     # texture) or per part (--materials parts: one mesh prim per part, a face takes its centre texel's part)
     use_parts = MATERIALS == "parts" and (src / "asset_parts.usda").exists() and (src / "parts.json").exists()
@@ -213,11 +228,26 @@ for spec in sys.argv[2:]:
     rep["poster"] = bool(poster and poster.exists())
     rep["parts"] = use_parts
     rep["maps"] = use_maps
+    if splat and splat.exists():
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from splat2mesh.athenea_splat import write_web_splat
+        print(name, "splat", write_web_splat(splat, out / "models" / f"{name}.splat"))
+        rep["splat"] = True
     cards.append((name, title, bool(img and img.exists()), rep))
     print(name, "pbr" if info["pbr"] else "colour")
 
 items = []
 for name, title, has_img, rep in cards:
+    if rep.get("page"):
+        src_img = f'<img class="src" src="models/{name}_input.jpg" alt="input image">' if has_img else ""
+        items.append(f'''<article>
+  <div class="view" data-page="{html.escape(rep['page'])}&amp;gui=0" tabindex="0" role="button" aria-label="Load {html.escape(title)}">
+    {f'<img class="poster" src="models/{name}_poster.jpg" alt="{html.escape(title)}" loading="lazy">' if rep.get("poster") else ""}
+    <span class="hint">Click to load the relightable splat (WebGPU)</span></div>
+  <div class="meta">{src_img}<div><h2>{html.escape(title)}</h2><p>{html.escape(rep.get('note', ''))}</p>
+  <p class="dl"><a href="{html.escape(rep['page'])}">Full page with HDRI picker</a></p></div></div>
+</article>''')
+        continue
     stats = f"{rep.get('faces', 0):,} faces · {rep.get('uv_charts', '?')} UV charts"
     if rep.get("boundary_edges") == 0 and rep.get("non_manifold_edges") == 0:
         stats += " · closed manifold"
@@ -227,17 +257,18 @@ for name, title, has_img, rep in cards:
         stats += f" · PSNR {rep['psnr']:.1f} dB"
     src_img = f'<img class="src" src="models/{name}_input.jpg" alt="input image">' if has_img else ""
     items.append(f'''<article>
-  <div class="view" data-usdz="models/{name}.usdz" data-parts="{'models/' + name + '_parts.json' if rep.get('parts') else ''}" data-maps="{'models/' + name + '_maps.json' if rep.get('maps') else ''}" tabindex="0" role="button" aria-label="Load the 3D model of {html.escape(title)}">
+  <div class="view" data-usdz="models/{name}.usdz" data-parts="{'models/' + name + '_parts.json' if rep.get('parts') else ''}" data-maps="{'models/' + name + '_maps.json' if rep.get('maps') else ''}" data-splat="{'models/' + name + '.splat' if rep.get('splat') else ''}" tabindex="0" role="button" aria-label="Load the 3D model of {html.escape(title)}">
     {f'<img class="poster" src="models/{name}_poster.jpg" alt="{html.escape(title)}" loading="lazy">' if rep.get("poster") else ""}
     <span class="hint">Click to load 3D</span></div>
   <div class="meta">{src_img}<div><h2>{html.escape(title)}</h2><p>{stats}</p>
-  <p class="dl"><a href="models/{name}.usdz" download>USDZ</a> · <a rel="ar" href="models/{name}.usdz">AR (iOS)</a></p></div></div>
+  <p class="dl"><a href="models/{name}.usdz" download>USDZ</a> · <a rel="ar" href="models/{name}.usdz">AR (iOS)</a>{f' · <a href="models/{name}.splat" download>Splat</a>' if rep.get('splat') else ''}</p></div></div>
 </article>''')
 
 (out / "index.html").write_text(f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>splat2mesh gallery</title>
 <script type="importmap">{{"imports": {{"three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+ "@mkkellogg/gaussian-splats-3d": "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js",
  "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"}}}}</script>
 <style>
 :root {{ --bg:#f6f5f2; --fg:#1d1d1f; --muted:#6b6b70; --card:#fff; --line:#e4e2dd; --accent:#b8322a; }}
@@ -253,6 +284,13 @@ article {{ background:var(--card); border:1px solid var(--line); border-radius:1
 .view .hint {{ position:absolute; left:50%; bottom:14px; transform:translateX(-50%); padding:6px 14px; border-radius:20px;
   background:var(--card); color:var(--fg); border:1px solid var(--line); font-size:13px }}
 .view.live .poster, .view.live .hint {{ display:none }}
+.view .mode {{ position:absolute; top:10px; right:10px; display:none; gap:4px; z-index:2 }} .view.live .mode {{ display:flex }}
+.view .mode button {{ font:inherit; font-size:12px; padding:3px 10px; border-radius:16px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer }} .view .mode button.on {{ background:var(--accent); color:#fff; border-color:var(--accent) }}
+.view iframe {{ position:absolute; inset:0; width:100%; height:100%; border:0 }}
+.max-btn {{ position:absolute; top:8px; right:8px; z-index:3; border:0; border-radius:6px; padding:4px 8px; background:rgba(0,0,0,.55); color:#fff; font:14px system-ui; cursor:pointer; display:none }}
+.view.live .max-btn {{ display:block }}
+.view.is-max {{ position:fixed; inset:0; z-index:1000; width:100vw !important; height:100dvh !important; background:#000; margin:0 }}
+body.has-max {{ overflow:hidden }}
 .view .msg {{ position:absolute; inset:0; display:grid; place-items:center; color:var(--muted); font-size:13px }}
 .meta {{ display:flex; gap:12px; padding:12px 14px; align-items:flex-start }} .src {{ width:64px; height:64px; object-fit:cover; border-radius:8px; border:1px solid var(--line) }}
 h2 {{ font-size:16px; margin:0 0 2px }} .meta p {{ margin:0; color:var(--muted); font-size:13px }} .dl a {{ color:var(--accent) }}
@@ -294,6 +332,23 @@ function view(el) {{
   const ctl = new OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.autoRotate = true; ctl.autoRotateSpeed = 1.2;
   const resize = () => {{ const w = el.clientWidth, h = el.clientHeight; r.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix(); }};
   new ResizeObserver(resize).observe(el); resize();
+  // Mesh | Splat switch: the Idol splat (.splat), loaded on demand into the same scene, lined up with the mesh
+  let meshG = null, splatV = null;
+  if (el.dataset.splat) {{
+    const bar = document.createElement("div"); bar.className = "mode";
+    bar.innerHTML = '<button class="on" data-m="mesh">Mesh</button><button data-m="splat">Splat</button>';
+    el.appendChild(bar);
+    bar.addEventListener("click", async (e) => {{ e.stopPropagation(); const m = e.target.dataset.m; if (!m) return;
+      bar.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.m === m));
+      if (m === "splat" && !splatV) {{
+        const note = document.createElement("div"); note.className = "msg"; note.textContent = "loading splat…"; el.appendChild(note);
+        try {{ const GS = await import("@mkkellogg/gaussian-splats-3d");
+          splatV = new GS.DropInViewer({{ sharedMemoryForWorkers: false, gpuAcceleratedSort: false }});
+          await splatV.addSplatScene(el.dataset.splat, {{ format: GS.SceneFormat.Splat, showLoadingUI: false, progressiveLoad: false }});
+          scene.add(splatV); }} catch (err) {{ console.error(err); }}
+        note.remove(); }}
+      if (meshG) meshG.visible = m === "mesh"; if (splatV) splatV.visible = m === "splat"; }});
+  }}
   const partsP = el.dataset.parts ? fetch(el.dataset.parts).then(r => r.json()).catch(() => ({{}})) : Promise.resolve({{}});
   loader.load(el.dataset.usdz, async (g) => {{
     const parts = await partsP;
@@ -342,7 +397,7 @@ function view(el) {{
         }});
       }}
     }}
-    msg.remove(); scene.add(g);
+    meshG = g; msg.remove(); scene.add(g);
     const box = new THREE.Box3().setFromObject(g), c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3()).length();
     ctl.target.copy(c); cam.position.copy(c).add(new THREE.Vector3(0.35, 0.18, 1).normalize().multiplyScalar(s * 1.6));
     cam.near = s / 100; cam.far = s * 20; cam.updateProjectionMatrix();
@@ -351,12 +406,28 @@ function view(el) {{
   r.setAnimationLoop(() => {{ if (!visible) return; ctl.update(); r.render(scene, cam); }});
   el.__dispose = () => {{ r.setAnimationLoop(null); r.dispose(); r.forceContextLoss(); const i = viewers.indexOf(setHdr); if (i >= 0) viewers.splice(i, 1); }};
 }}
+function addMax(el, onResize) {{   // ⤢ / ✕: the card's viewer to the whole window (fullscreen API where there is one)
+  if (el.querySelector(".max-btn")) return;
+  const b = document.createElement("button"); b.className = "max-btn"; b.title = "Maximize"; b.textContent = "⤢"; el.appendChild(b);
+  const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+  const set = (on) => {{ el.classList.toggle("is-max", on); document.body.classList.toggle("has-max", on); b.textContent = on ? "✕" : "⤢"; requestAnimationFrame(() => onResize && onResize()); }};
+  b.onclick = (e) => {{ e.stopPropagation();
+    if (el.classList.contains("is-max")) {{ if (fsEl()) (document.exitFullscreen || document.webkitExitFullscreen).call(document); set(false); return; }}
+    const req = el.requestFullscreen || el.webkitRequestFullscreen; set(true); if (req) Promise.resolve(req.call(el)).catch(() => {{}}); }};
+  const sync = () => {{ if (!fsEl() && el.classList.contains("is-max") && document.fullscreenEnabled !== undefined) set(false); }};
+  document.addEventListener("fullscreenchange", sync); document.addEventListener("webkitfullscreenchange", sync);
+  addEventListener("keydown", (e) => {{ if (e.key === "Escape" && el.classList.contains("is-max")) set(false); }});
+}}
+function page(el) {{   // a page of its own (the relightable splat viewer) inside the card
+  const f = document.createElement("iframe"); f.src = el.dataset.page; f.allow = "fullscreen"; f.loading = "lazy"; el.appendChild(f);
+  el.__dispose = () => f.remove();
+}}
 const live = [];
 document.querySelectorAll(".view").forEach(el => {{
   const go = () => {{ if (el.classList.contains("live")) return;
     if (live.length >= 4) {{ const old = live.shift(); old.__dispose && old.__dispose(); old.classList.remove("live");
-      old.querySelectorAll("canvas, .msg").forEach(n => n.remove()); }}
-    el.classList.add("live"); live.push(el); view(el); }};
+      old.querySelectorAll("canvas, .msg, iframe, .max-btn").forEach(n => n.remove()); }}
+    el.classList.add("live"); live.push(el); if (el.dataset.page) page(el); else view(el); addMax(el, () => window.dispatchEvent(new Event("resize"))); }};
   el.addEventListener("click", go);
   el.addEventListener("keydown", e => {{ if (e.key === "Enter" || e.key === " ") {{ e.preventDefault(); go(); }} }});
 }});

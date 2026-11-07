@@ -123,6 +123,19 @@ the picture, generated on its own with Idol and placed back where it is in the w
 test sets on the development machines (host names and paths are hard-coded). Kept as a record of how the gallery
 was made.
 
+## Python modules (`splat2mesh/`)
+
+| Module | What |
+|---|---|
+| `config.py` | the one configuration: athenea, GPU lock, Idol/ENEAS hosts, Iris, DeepSeek, HDRI, notifier ([setup](setup.md)) |
+| `athenea.py` | athenea from Python and its CLI: splat views, stages with `--turntable`/`--cameras`, EXR → PNG |
+| `athenea_splat.py` | a splat with per-gaussian materials → relightable USD for athenea |
+| `remote.py` | Idol and ENEAS locally, on a Linux host or on a Windows host (ENEAS in WSL) |
+| `deepseek.py` | DeepSeek vision client (JSON answers) |
+| `direct.py`, `geometry.py`, `texture.py`, `usd_export.py`, `rerender.py` | meshing, UVs, bake, USD, QA ([pipeline](pipeline.md)) |
+| `materials.py`, `overlap.py`, `gs_materials.py`, `openings.py`, `interior.py`, `glass.py` | materials ([materials](materials.md)) |
+| `ply.py` | PLY vertex I/O (numpy) |
+
 ## Other folders
 
 - `tests/synthetic.py`, `tests/glass_selftest.py`: the CPU tests ([setup](setup.md)).

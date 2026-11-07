@@ -17,8 +17,8 @@ import argparse, json, sys
 from pathlib import Path
 from PIL import Image, ImageDraw
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gen_views import ds, img_url
+sys.path.insert(0, str(Path(__file__).resolve().parent)); sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from splat2mesh.deepseek import ask as ds, img_url
 
 S = 384
 

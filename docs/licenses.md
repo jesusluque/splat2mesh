@@ -17,6 +17,13 @@ All permissive:
 
 PLY files are read and written by `splat2mesh/ply.py`; the GPL-licensed `plyfile` package is no longer used.
 
+## Bundled
+
+| What | Licence |
+|---|---|
+| `third_party/athenea` (git submodule, the renderer) | Apache-2.0 |
+| `assets/hdri/brown_photostudio_02.hdr` (Poly Haven) | CC0 |
+
 ## Models and tools the pipeline calls
 
 They are not shipped with splat2mesh; each is installed separately under its own licence.

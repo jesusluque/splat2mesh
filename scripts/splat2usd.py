@@ -36,11 +36,9 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 IMG = {".png", ".jpg", ".jpeg", ".webp"}
 PY = sys.executable
-SHARED = Path(os.environ.get("SPLAT2MESH_GPU_LOCK", Path.home() / "luc/athenea-gpu/shared.sh"))
-TG = Path(os.environ.get("SPLAT2MESH_NOTIFY", Path.home() / "bin/tg"))
-IXWIN = os.environ.get("SPLAT2MESH_IDOL_HOST", "ixwin-tb")
-IX_PY = r"C:\splat2mesh\venv\Scripts\python"
-IX_DIR = "C:/splat2mesh/auto"
+from splat2mesh.config import cfg, gpu_prefix, iris_python
+from splat2mesh.remote import idol_sample
+NOTIFY = os.path.expanduser(cfg("notify.command")) if cfg("notify.command") else ""
 
 
 def sh(cmd, **kw):
@@ -50,35 +48,10 @@ def sh(cmd, **kw):
     return r.stdout
 
 
-def idol_linux(image: Path, work: Path, gaussians: int) -> Path:
-    """Idol on a plain Linux CUDA host (~/splat2mesh_eneas/idol-sdk)."""
-    d = f"splat2mesh_eneas/idol_jobs/{work.name}"
-    sh(["ssh", IXWIN, f"mkdir -p ~/{d}"])
-    sh(["scp", "-q", str(image), f"{IXWIN}:{d}/{image.name}"])
-    mode = "real" if image.suffix.lower() in {".jpg", ".jpeg"} else "synthetic"
-    sh(["ssh", IXWIN, f"cd ~/splat2mesh_eneas/idol-sdk && ATTN_BACKEND=sdpa .venv/bin/python -m idol.sample "
-                      f"--image ~/{d}/{image.name} --mode {mode} --out ~/{d} --num_gaussians {gaussians}"])
-    ply = work / f"{image.stem}.ply"
-    sh(["scp", "-q", f"{IXWIN}:{d}/{image.stem}.ply", str(ply)])
-    sh(["scp", "-q", f"{IXWIN}:{d}/{image.stem}_input.png", str(work / "idol_input.png")])
-    return ply
-
-
 def idol(image: Path, work: Path, gaussians: int) -> Path:
-    """Image → 3DGS .ply with Idol on ixwin (synthetic mode for renders/generated images, real for photos)."""
-    if os.environ.get("SPLAT2MESH_IDOL_LINUX") == "1":
-        return idol_linux(image, work, gaussians)
-    sh(["ssh", IXWIN, f'mkdir "{IX_DIR}" 2>nul & exit 0'])
-    sh(["scp", "-q", str(image), f"{IXWIN}:{IX_DIR}/{image.name}"])
-    mode = "real" if image.suffix.lower() in {".jpg", ".jpeg"} else "synthetic"
-    sh(["ssh", IXWIN, rf'cd /d C:\splat2mesh\idol-sdk && set ATTN_BACKEND=sdpa&& {IX_PY} -m idol.sample '
-                      rf'--image {IX_DIR}/{image.name} --mode {mode} --out {IX_DIR} --no_optimize --num_gaussians {gaussians}'])
-    ply = work / f"{image.stem}.ply"
-    sh(["scp", "-q", f"{IXWIN}:{IX_DIR}/{image.stem}.ply", str(ply)])
-    sh(["scp", "-q", f"{IXWIN}:{IX_DIR}/{image.stem}_input.png", str(work / "idol_input.png")])
-    # Idol's estimate of the input camera (yaw/pitch around the object): places parts generated from one picture
-    subprocess.run(["scp", "-q", f"{IXWIN}:{IX_DIR}/{image.stem}_camera.json", str(work / "idol_camera.json")])
-    return ply
+    """Image → 3DGS .ply with Idol on the configured host (synthetic mode for renders/generated images, real for
+    photos); idol_input.png and idol_camera.json land next to it."""
+    return idol_sample(image, work, gaussians)
 
 
 def process(inp: Path, out_root: Path, a) -> dict:
@@ -92,7 +65,7 @@ def process(inp: Path, out_root: Path, a) -> dict:
             shutil.copy(inp, work / f"source{inp.suffix.lower()}")
             if a.upscale:              # Iris restorer on the object crop: crisper detail in, cleaner splat out
                 up = work / f"{inp.stem}_up.png"
-                sh(["bash", str(SHARED), str(ROOT / "third_party/iris-3b/.venv/bin/python"),
+                sh(gpu_prefix() + [iris_python(),
                     str(ROOT / "scripts/upscale_detail.py"), str(inp), "", str(work / "upscale"),
                     "--restore-only", str(up)], stdin=subprocess.DEVNULL)
                 rep["upscaled"] = True
@@ -143,7 +116,7 @@ def process(inp: Path, out_root: Path, a) -> dict:
         sh(cams)
         flags = (["--rotate-x", "180"] if y_down else []) + ([] if antialias else ["--no-antialias"])
         t1 = time.time()
-        out = sh(["bash", str(SHARED), "bash", str(ROOT / "scripts/render_athenea.sh"), str(ply), str(views_dir)] + flags)
+        out = sh(["bash", str(ROOT / "scripts/render_athenea.sh"), str(ply), str(views_dir)] + flags)   # locks itself
         if "failed" in out:
             rep["render_warnings"] = [l for l in out.splitlines() if "failed" in l]
         rep["t_render_s"] = round(time.time() - t1, 1)
@@ -237,13 +210,13 @@ def main():
     ok = sum(r["ok"] for r in reps)
     line = f"splat2usd: {ok}/{len(reps)} OK → {out_root}"
     print(line)
-    if a.notify and TG.exists():
+    if a.notify and NOTIFY:
         rows = [f"{'✔' if r['ok'] else '✘'} {r['name']}: PSNR {r.get('qa', {}).get('psnr_mean', 0):.1f}" for r in reps]
-        subprocess.run([str(TG), "--from", "splat2mesh", line + "\n" + "\n".join(rows)])
+        subprocess.run([NOTIFY, "--from", "splat2mesh", line + "\n" + "\n".join(rows)])
         for r in reps[:5]:
             img = out_root / r["name"] / "usd" / "compare.png"
             if img.exists():
-                subprocess.run([str(TG), "-s", "--from", "splat2mesh", "-f", str(img), r["name"]])
+                subprocess.run([NOTIFY, "-s", "--from", "splat2mesh", "-f", str(img), r["name"]])
 
 
 if __name__ == "__main__":

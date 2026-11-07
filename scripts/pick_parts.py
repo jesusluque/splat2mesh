@@ -11,8 +11,8 @@ import base64, io, json, sys, urllib.request
 from pathlib import Path
 from PIL import Image, ImageDraw
 
-sys.path.insert(0, str(Path.home() / ".claude/skills/research-deepseek/scripts"))
-import dsr
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from splat2mesh import deepseek as _deepseek
 
 ACCEPT = 3
 S = 384
@@ -42,12 +42,10 @@ def sheet(ref, cut, cands):
 def ask(im, part, n):
     b = io.BytesIO(); im.save(b, "JPEG", quality=88)
     url = "data:image/jpeg;base64," + base64.b64encode(b.getvalue()).decode()
-    body = {"model": "deepseek-flash", "temperature": 0.1, "response_format": {"type": "json_object"},
+    body = {"model": "", "temperature": 0.1, "response_format": {"type": "json_object"},
             "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}},
                                                       {"type": "text", "text": PROMPT.format(part=part, n=n)}]}]}
-    req = urllib.request.Request(dsr.API, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json", "Authorization": "Bearer " + dsr.key()})
-    return json.loads(json.load(urllib.request.urlopen(req, timeout=300))["choices"][0]["message"]["content"])
+    return _deepseek.ask(body["messages"][0]["content"])
 
 
 def pick(ref, items):
