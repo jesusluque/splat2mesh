@@ -2,7 +2,9 @@
    Qwen3-VL describes parts by material (image + Iris prompt) → ENEAS tracks each part on a 16-view orbit (ENEAS host)
    → masks voted per texel → library PBR (roughness/metallic) + measured base colour → USD.
 
-    python scripts/flow_batch.py SRC_DIR OUT_DIR PROMPTS.txt [--only 00,03]
+    python scripts/flow_batch.py SRC_DIR OUT_DIR PROMPTS.txt [--only 00,03] [--gs]
+--gs: parts segmented on renders of the splat and voted per gaussian (splat2mesh/gs_materials.py); the mesh inherits
+them. The splat with per-gaussian materials is written to OUT_DIR/NN/usd/mat/splat_materials.ply.
 SRC_DIR/NN/{NN.ply, idol_input.png} as written by splat2usd; OUT_DIR/NN/usd is (re)built with direct mode.
 """
 import json, subprocess, sys, time
@@ -42,6 +44,33 @@ if need:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for d in need:
         (out / d.name / "materials.txt").write_text(Path(d / "idol_input.materials.txt").read_text())
+def part_materials_from_prompt(desc, pr):
+    """A part the prompt names with its material right before it ("a round grey stone base", "with a brass rim")
+    takes that material. The part's noun must be the head of the phrase (followed by punctuation, the end or a
+    linking word): in "gold belt buckle" the gold is the buckle's, not the belt's."""
+    import re
+    pairs = []
+    for chunk in desc.split(";"):
+        if ":" in chunk:
+            mat, things = chunk.split(":", 1)
+            pairs += [(mat.strip(), t.strip()) for t in things.split(",") if t.strip()]
+    out = []
+    for mat, part in pairs:
+        noun = part.split()[-1].lower()
+        for m in re.finditer(r"((?:[\w-]+ ){1,3})" + re.escape(noun) + r"(?=\s*(?:[,.;]|$| with | and | on | in | holding | standing ))", pr):
+            words = m.group(1)
+            hit = [k for k, v in LIB.items() if any(re.search(r"\b" + re.escape(w) + r"\b", words) for w in v["keywords"])]
+            if len(hit) == 1 and hit[0] != mat:
+                print(f"prompt names the material of {part}: {mat} → {hit[0]}", flush=True)
+                mat = hit[0]
+            break
+        out.append((mat, part))
+    groups = {}
+    for mat, part in out:
+        groups.setdefault(mat, []).append(part)
+    return "; ".join(f"{m}: {', '.join(ps)}" for m, ps in groups.items())
+
+
 # 2b) the generation prompt is the better authority on WHICH metal/wood/glass: swap the VLM's generic family
 #     member for the specific one the prompt names ("gold" → "brass" when the prompt says brass)
 from splat2mesh.materials import LIB, lookup
@@ -66,14 +95,16 @@ for d in items:
                 if len(missing) == 1:
                     m = missing[0]
         new.append(f"{m}: {things.strip()}")
-    f.write_text("; ".join(new))
+    f.write_text(part_materials_from_prompt("; ".join(new), pr))
 # 3) ENEAS 3D + PBR per object
 summary = {}
 for d in items:
     desc = (out / d.name / "materials.txt").read_text().strip()
     t = time.time()
     p = subprocess.run([sys.executable, str(ROOT / "scripts/materials_eneas3d.py"), str(out / d.name / "usd"),
-                        str(d / "idol_input.png"), desc], capture_output=True, text=True)
+                        str(d / "idol_input.png"), desc] + (["--gs", str(d / f"{d.name}.ply")] if "--gs" in sys.argv else []),
+                       capture_output=True, text=True)
+    (out / d.name / "materials.log").write_text(p.stdout + p.stderr)
     from splat2mesh.interior import extract_interior          # filaments, wicks… inside glass parts
     try:
         print(d.name, "interior", extract_interior(out / d.name / "usd", d / f"{d.name}.ply", y_down=True), flush=True)
