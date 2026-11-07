@@ -220,7 +220,7 @@ def install_athenea():
     progress(100, c, f"ready: {exe}")
 
 
-def install_idol(vae: str = "klein"):
+def install_idol(vae: str = "klein", dinov3_dir: str | None = None):
     c = "idol"
     d = TOOLS / "idol-sdk"
     progress(2, c, "getting the Idol SDK")
@@ -242,6 +242,9 @@ from huggingface_hub import snapshot_download, hf_hub_download
 w = snapshot_download("speridlabs/idol", local_dir=r"{w}")
 cfg = json.load(open(os.path.join(w, "config.json")))
 cfg["image_encoders"]["flux2_vae"] = "{VAE[vae]}"
+DINO = r"{dinov3_dir or ''}"
+if DINO:                 # a local copy (offline install, no token): the config points at the folder
+    cfg["image_encoders"]["dinov3"] = DINO
 json.dump(cfg, open(os.path.join(w, "config.json"), "w"), indent=1)
 def get(repo, **kw):     # a gated repo without a token: the copy already in the cache, if there is one
     try:
@@ -251,7 +254,8 @@ def get(repo, **kw):     # a gated repo without a token: the copy already in the
             return snapshot_download(repo, local_files_only=True, **kw)
         except Exception:
             raise SystemExit(f"{{repo}}: {{e}} -- accept its terms on huggingface.co/{{repo}} and give a token.")
-get("{DINOV3}")
+if not DINO:
+    get("{DINOV3}")
 get("{VAE[vae]}", allow_patterns=["vae/*"])
 print("weights ok")
 """
@@ -331,6 +335,7 @@ def main():
     i = sp.add_parser("install"); i.add_argument("components", nargs="+", choices=COMPONENTS + ("all",))
     i.add_argument("--vae", default="klein", choices=list(VAE))
     i.add_argument("--iris-mode", default="cpu-encoder", choices=["cpu-encoder", "gpu", "space"])
+    i.add_argument("--dinov3-dir", help="a local DINOv3 folder (config.json + model.safetensors) instead of the gated download")
     i.add_argument("--hf-token-file", help="a file with a Hugging Face token: read, deleted, used for the downloads")
     o = sp.add_parser("options")
     o.add_argument("--deepseek-key-env", help="name of an environment variable holding the DeepSeek key")
@@ -362,7 +367,7 @@ def main():
     failed = []
     for comp in comps:
         try:
-            {"athenea": install_athenea, "idol": lambda: install_idol(a.vae), "eneas": install_eneas,
+            {"athenea": install_athenea, "idol": lambda: install_idol(a.vae, a.dinov3_dir), "eneas": install_eneas,
              "iris": lambda: install_iris(a.iris_mode)}[comp]()
         except Exception as e:
             print(f"FAILED {comp}: {e}", flush=True); failed.append(comp)

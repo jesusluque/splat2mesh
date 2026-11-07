@@ -7,11 +7,16 @@ JOB.json (every key optional except source and its input):
    "source": "prompt" | "image" | "splat",
    "prompt": "...", "image": "path.png", "splat": "path.ply", "camera": "idol_camera.json", "input": "idol_input.png",
    "text2image": {"seed": 7, "size": "1024x1024", "mode": "auto" | "gpu" | "cpu-encoder" | "space"},
-   "idol": {"seeds": 1, "gaussians": 262144},
+   "idol": {"seeds": 1, "gaussians": 262144, "mode": "auto" | "synthetic" | "real", "steps": 50, "cfg": 3.0,
+            "rescale_t": 3.0, "dinov3_dtype": "bf16" | "fp32"},
    "outputs": {"splat": true, "mesh": false, "materials": true},
-   "mesh": {"faces": 80000, "tex": 4096},
+   "materials": {"max_parts": 12, "coverage": true, "overlap": true, "deepseek_model": ""},
+   "glass": {"mode": "path" | "browser", "cell": 1.0},
+   "mesh": {"path": "direct" | "render", "faces": 80000, "tex": 4096, "smooth": 0.0, "max_folds": 300,
+            "render_tex": 2048},
    "parts": "",                                  # "material: part, part; ..." to skip the automatic part list
-   "render": {"turntable": true, "frames": 48, "size": 900, "technique": "raster", "hdri": ""}}
+   "render": {"turntable": true, "frames": 48, "size": 900, "technique": "raster", "spp": 96, "elev": 15,
+              "dist": 3.3, "grey": 0.8, "hdri": ""}}
 
 Progress lines:  PROGRESS <0-100> <stage>: <message>      Outputs:  <out>/results.json
 """
@@ -96,7 +101,9 @@ def idol(job, image: Path, out: Path, log: Path, prog) -> tuple[Path, Path, Path
         prog("splat", i / n, f"Idol, seed {s} ({i + 1}/{n})")
         d = out / "seeds" / f"s{s}"
         with gpu_lock():
-            ply = idol_sample(image, d, g, seed=s)
+            ply = idol_sample(image, d, g, seed=s, mode=o.get("mode"), steps=o.get("steps"),
+                              cfg_strength=o.get("cfg"), rescale_t=o.get("rescale_t"),
+                              dinov3_dtype=o.get("dinov3_dtype"))
         if n > 1:
             prog("splat", (i + 0.7) / n, f"scoring seed {s} from four sides (athenea + DeepSeek)")
             try:
@@ -124,8 +131,14 @@ def splat_materials(job, ply, cam, inp, out: Path, log: Path, prog) -> Path:
     cmd = [PY, ROOT / "scripts/splat_flow.py", ply, d, "--input", inp, "--camera", cam]
     if job.get("prompt"):
         cmd += ["--prompt", job["prompt"]]
+    m, g = job.get("materials", {}), job.get("glass", {})
+    cmd += ["--max-parts", m.get("max_parts", 12), "--glass", g.get("mode", "path"), "--glass-cell", g.get("cell", 1.0)]
+    cmd += (["--no-coverage"] if m.get("coverage") is False else []) + (["--no-overlap"] if m.get("overlap") is False else [])
+    env = dict(os.environ)
+    if m.get("deepseek_model"):
+        env["SPLAT2MESH_DEEPSEEK_MODEL"] = m["deepseek_model"]
     p = subprocess.Popen([str(c) for c in cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                         encoding="utf-8", errors="replace")
+                         encoding="utf-8", errors="replace", env=env)
     # the stages of scripts/splat_flow.py and materials_eneas3d.py as they print them; ENEAS (the long part)
     # moves the bar phrase by phrase
     marks = [("parts:", 0.05, "parts listed"), ("annotation frame", 0.12, "orbit rendered with athenea"),
@@ -159,12 +172,15 @@ def mesh(job, ply, cam, inp, out: Path, log: Path, prog, reuse_from: Path | None
     shutil.copy(cam, src / "00" / "idol_camera.json")
     (out / "prompts.txt").write_text((job.get("prompt") or "") + "\n")
     m = job.get("mesh", {})
+    prog("mesh", 0.05, ("direct mode" if m.get("path", "direct") == "direct" else "render path") + ": solid, UVs, texture")
+    cmd = [PY, ROOT / "scripts/splat2usd.py", src / "00" / "00.ply", "--y-down", "--out", dst,
+           "--faces", m.get("faces", 80000), "--tex", m.get("tex", 4096), "--smooth", m.get("smooth", 0.0),
+           "--max-folds", m.get("max_folds", 300), "--render-tex", m.get("render_tex", 2048)]
+    sh(cmd + (["--direct"] if m.get("path", "direct") == "direct" else []), log)
     if not job.get("outputs", {}).get("materials", True):
-        prog("mesh", 0.05, "direct mode: solid, UVs, texture")
-        sh([PY, ROOT / "scripts/splat2usd.py", src / "00" / "00.ply", "--direct", "--y-down", "--out", dst,
-            "--faces", m.get("faces", 80000), "--tex", m.get("tex", 4096)], log)
         prog("mesh", 1, "mesh ready")
         return next(dst.rglob("asset.usda"))
+    prog("mesh", 0.3, "mesh ready; materials per texel from the splat's votes")
     if reuse_from is not None:                       # the splat's own ENEAS masks: no second segmentation
         mat = dst / "00" / "usd" / "mat"; mat.mkdir(parents=True, exist_ok=True)
         for f in ("masks_gs.npz",):
@@ -174,7 +190,6 @@ def mesh(job, ply, cam, inp, out: Path, log: Path, prog, reuse_from: Path | None
             shutil.copytree(reuse_from / "mat" / "gs_orbit", mat / "gs_orbit", dirs_exist_ok=True)
         if (reuse_from / "materials.txt").exists():
             shutil.copy(reuse_from / "materials.txt", dst / "00" / "materials.txt")
-    prog("mesh", 0.05, "direct mode, then materials per texel from the splat's votes")
     sh([PY, ROOT / "scripts/flow_batch.py", src, dst, out / "prompts.txt", "--gs", "--reuse-masks"], log)
     prog("mesh", 1, "mesh with materials ready")
     return dst / "00" / "usd" / "asset.usda"
@@ -188,7 +203,8 @@ def turntable(job, asset: Path, mp4: Path, front_deg: float, log: Path, prog, st
     if r.get("hdri"):
         kw["hdri"] = r["hdri"]
     tt(asset, mp4, frames=int(r.get("frames", 48)), size=int(r.get("size", 900)),
-       technique=r.get("technique", "raster"), start_deg=front_deg, **kw)
+       technique=r.get("technique", "raster"), start_deg=front_deg, spp=int(r.get("spp", 96)),
+       elev=float(r.get("elev", 15)), dist=float(r.get("dist", 3.3)), grey=float(r.get("grey", 0.8)), **kw)
     prog(stage, 1, mp4.name)
 
 

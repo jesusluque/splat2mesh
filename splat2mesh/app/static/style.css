@@ -76,3 +76,7 @@ a { color: var(--accent); }
 code { font-size: 12px; }
 @media (max-width: 640px) { header { flex-wrap: wrap; gap: 8px; } .gpu { margin-left: 0; } main { padding: 16px; }
   .summary { grid-template-columns: 1fr; } }
+details { margin: 12px 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+details > summary { cursor: pointer; color: var(--ink); font-size: 14px; }
+details[open] > summary { margin-bottom: 6px; }
+.row > .check { flex: 1 1 260px; margin: 10px 0; }

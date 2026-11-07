@@ -54,12 +54,19 @@ $("#image").onchange = () => { const f = $("#image").files[0]; const im = $("#im
 function options() {
   return {
     text2image: { seed: +$("#t2i_seed").value, size: $("#t2i_size").value, mode: $("#t2i_mode").value },
-    idol: { seeds: +$("#seeds").value, gaussians: +$("#gaussians").value },
+    idol: { seeds: +$("#seeds").value, gaussians: +$("#gaussians").value, mode: $("#idol_mode").value,
+            steps: +$("#idol_steps").value, cfg: +$("#idol_cfg").value, rescale_t: +$("#idol_rescale").value,
+            dinov3_dtype: $("#idol_dino").value },
     outputs: { splat: $("#out_splat").checked, mesh: $("#out_mesh").checked, materials: $("#out_materials").checked },
-    mesh: { faces: +$("#faces").value, tex: +$("#tex").value },
+    mesh: { faces: +$("#faces").value, tex: +$("#tex").value, path: $("#mesh_path").value, smooth: +$("#mesh_smooth").value,
+            max_folds: +$("#mesh_folds").value, render_tex: +$("#mesh_rtex").value },
+    materials: { max_parts: +$("#max_parts").value, coverage: $("#coverage").checked, overlap: $("#overlap").checked,
+                 deepseek_model: $("#ds_model").value.trim() },
+    glass: { mode: $("#glass_mode").value, cell: +$("#glass_cell").value },
     parts: $("#parts").value.trim(),
     render: { turntable: $("#tt").checked, frames: +$("#frames").value, size: +$("#size").value,
-              technique: $("#technique").value, hdri: $("#hdri").value },
+              technique: $("#technique").value, hdri: $("#hdri").value, spp: +$("#spp").value,
+              elev: +$("#elev").value, dist: +$("#dist").value, grey: +$("#grey").value },
   };
 }
 
@@ -73,6 +80,28 @@ function estimate(o, n) {      // minutes on an 8 GB RTX, from measured runs
   return Math.round(m * n);
 }
 
+function advancedSummary(o) {      // only what differs from the defaults
+  const d = [];
+  const i = o.idol;
+  if (i.mode !== "auto") d.push(`Idol ${i.mode}`);
+  if (i.steps !== 50) d.push(`${i.steps} steps`);
+  if (i.cfg !== 3) d.push(`CFG ${i.cfg}`);
+  if (i.rescale_t !== 3) d.push(`time shift ${i.rescale_t}`);
+  if (i.dinov3_dtype !== "bf16") d.push("DINOv3 fp32");
+  if (o.outputs.mesh && o.mesh.path !== "direct") d.push("render path");
+  if (o.outputs.mesh && o.mesh.smooth) d.push(`smoothing ${o.mesh.smooth}`);
+  if (o.materials.max_parts !== 12) d.push(`${o.materials.max_parts} parts max`);
+  if (!o.materials.coverage) d.push("no coverage check");
+  if (!o.materials.overlap) d.push("masks unchecked");
+  if (o.materials.deepseek_model) d.push(o.materials.deepseek_model);
+  if (o.glass.mode !== "path") d.push("glass for browsers");
+  if (o.glass.cell !== 1) d.push(`glass spacing ${o.glass.cell}`);
+  if (o.render.technique === "rt" && o.render.spp !== 96) d.push(`${o.render.spp} spp`);
+  if (o.render.elev !== 15 || o.render.dist !== 3.3) d.push(`camera ${o.render.elev}° × ${o.render.dist}`);
+  if (o.render.grey !== 0.8) d.push(`grey ${o.render.grey}`);
+  return d.join(", ");
+}
+
 function summary() {
   const o = options(); const s = source();
   const n = s === "batch" ? (batchKind() === "prompts" ? $("#batch_prompts").value.split("\n").filter((x) => x.trim()).length : $("#batch_images").files.length) : 1;
@@ -82,6 +111,7 @@ function summary() {
     ["Idol", s === "splat" ? "—" : `${o.idol.seeds} seed${o.idol.seeds > 1 ? "s (best kept)" : ""}, ${o.idol.gaussians.toLocaleString()} gaussians`],
     ["Outputs", outs], ["Materials", o.outputs.materials ? (o.parts ? "by hand: " + o.parts : "automatic (DeepSeek + ENEAS)") : "none"],
     ["Turntable", o.render.turntable ? `${o.render.frames} frames, ${o.render.size}px, ${o.render.technique}, ${o.render.hdri || "studio"}` : "none"],
+    ["Advanced", advancedSummary(o) || "defaults"],
     ["Estimated time", `about ${estimate(o, n)} min`],
   ];
   $("#summary").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
@@ -218,5 +248,6 @@ if (q.get("seeds")) { $("#seeds").value = q.get("seeds"); $("#seeds_v").value = 
 if (q.get("mesh")) $("#out_mesh").checked = q.get("mesh") === "1";
 if (q.get("technique")) $("#technique").value = q.get("technique");
 if (q.get("name")) $("#jobname").value = q.get("name");
+if (q.get("adv") === "1") $$("details").forEach((d) => d.open = true);
 if (q.get("step")) step = Math.max(0, visibleSteps().findIndex(([id]) => id === q.get("step")));
 renderSteps(); refreshStatus().then(() => { if (location.hash) show(location.hash.slice(1)); renderSteps(); }); refreshJobs();

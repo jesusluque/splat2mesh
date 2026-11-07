@@ -35,6 +35,12 @@ def main():
     ap.add_argument("--camera", help="Idol's camera estimate for it (when SOURCE is a .ply)")
     ap.add_argument("--reuse-masks", action="store_true"); ap.add_argument("--turntable", type=int, default=0)
     ap.add_argument("--technique", default="rt", choices=["rt", "raster"])
+    ap.add_argument("--max-parts", type=int, default=12, help="parts DeepSeek may list")
+    ap.add_argument("--no-coverage", action="store_true", help="skip DeepSeek's check for large parts the list missed")
+    ap.add_argument("--no-overlap", action="store_true", help="keep ENEAS's masks as they are (no check, no overlap resolution)")
+    ap.add_argument("--glass", default="path", choices=["path", "browser"],
+                    help="glass surfels: fully covering (refracts when path traced) or at the raster cover (seen through in a browser)")
+    ap.add_argument("--glass-cell", type=float, default=1.0, help="glass surfel spacing in grid steps (2: a quarter as many)")
     a = ap.parse_args()
     out = Path(a.out); src = out / "src"; src.mkdir(parents=True, exist_ok=True)
     t0 = time.time(); log = lambda *m: print(f"[{time.time() - t0:6.0f}s]", *m, flush=True)
@@ -56,7 +62,9 @@ def main():
     if not desc_f.exists():
         from splat2mesh.describe import complete_parts, describe_ds, part_materials_from_prompt
         # the list, then a coverage check: large visible parts it left out (hands, a cloak) are added
-        desc = complete_parts(describe_ds(src / "idol_input.png", a.prompt), src / "idol_input.png")
+        desc = describe_ds(src / "idol_input.png", a.prompt, max_parts=a.max_parts)
+        if not a.no_coverage:
+            desc = complete_parts(desc, src / "idol_input.png")
         if a.prompt:
             desc = part_materials_from_prompt(desc, a.prompt.lower())
         desc_f.write_text(desc)
@@ -64,7 +72,8 @@ def main():
     log("parts:", desc)
 
     cmd = [sys.executable, str(ROOT / "scripts/materials_eneas3d.py"), str(out), str(src / "idol_input.png"), desc,
-           "--gs", str(ply), "--splat-only"] + (["--reuse-masks"] if a.reuse_masks else [])
+           "--gs", str(ply), "--splat-only"] + (["--reuse-masks"] if a.reuse_masks else []) \
+          + (["--no-overlap"] if a.no_overlap else [])
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                          errors="replace", env={**__import__("os").environ, "PYTHONUNBUFFERED": "1"})
     lines = []
@@ -76,7 +85,8 @@ def main():
     log("materials:", [l for l in lines if l.startswith(("splat materials", "splat finish"))])
 
     from splat2mesh.athenea_splat import write_splat_usd
-    log("USD:", write_splat_usd(out / "mat" / "splat_materials.ply", out / "splat.usdc", y_down=True))
+    log("USD:", write_splat_usd(out / "mat" / "splat_materials.ply", out / "splat.usdc", y_down=True,
+                                raster_glass=a.glass == "browser", glass_cell=a.glass_cell))
     if a.turntable:
         from splat2mesh.athenea import turntable
         import json

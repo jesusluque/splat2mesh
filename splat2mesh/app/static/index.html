@@ -83,6 +83,17 @@
         <option value="131072">131 072 (fast)</option><option value="262144" selected>262 144</option>
         <option value="524288">524 288 (detail)</option><option value="1048576">1 048 576 (max)</option></select></label>
     </div>
+    <details><summary>Advanced (Idol)</summary>
+      <div class="row">
+        <label>Picture type <select id="idol_mode"><option value="auto" selected>automatic (.jpg = photo)</option>
+          <option value="synthetic">render or generated (crop 1.2)</option><option value="real">photo (crop 1.7)</option></select></label>
+        <label>Sampling steps <input id="idol_steps" type="number" value="50" min="10" max="200"></label>
+        <label>Guidance (CFG) <input id="idol_cfg" type="number" value="3.0" step="0.5" min="1" max="10"></label>
+        <label>Time shift <input id="idol_rescale" type="number" value="3.0" step="0.5" min="1" max="8"></label>
+        <label>DINOv3 precision <select id="idol_dino"><option value="bf16" selected>bf16</option><option value="fp32">fp32 (+1.7 GB)</option></select></label>
+      </div>
+      <p class="hint">Defaults are Idol's own. Seeds tried: 42, 1, 2, 3… in that order.</p>
+    </details>
   </div>
 
   <div class="step" data-step="outputs">
@@ -99,6 +110,31 @@
       <label>Faces <input id="faces" type="number" value="80000" step="10000"></label>
       <label>Texture <select id="tex"><option>2048</option><option selected>4096</option></select></label>
     </div>
+    <details><summary>Advanced (mesh)</summary>
+      <div class="row">
+        <label>Path <select id="mesh_path"><option value="direct" selected>direct mode (the splat's opacity field)</option>
+          <option value="render">render path (87 views, TSDF + visual hull)</option></select></label>
+        <label>Smoothing (Taubin, ×10 iterations) <input id="mesh_smooth" type="number" value="0" step="0.5" min="0" max="10"></label>
+        <label>Folds before the render path <input id="mesh_folds" type="number" value="300" min="0"></label>
+        <label>Render path texture <select id="mesh_rtex"><option>1024</option><option selected>2048</option><option>4096</option></select></label>
+      </div>
+    </details>
+    <details><summary>Advanced (materials)</summary>
+      <div class="row">
+        <label>Parts DeepSeek may list <input id="max_parts" type="number" value="12" min="3" max="20"></label>
+        <label class="check"><input id="coverage" type="checkbox" checked><span>Check for large parts the list missed (hands, boots…)</span></label>
+        <label class="check"><input id="overlap" type="checkbox" checked><span>Check each mask and settle overlaps (DeepSeek)</span></label>
+        <label>DeepSeek model <input id="ds_model" placeholder="deepseek-flash"></label>
+      </div>
+    </details>
+    <details><summary>Advanced (glass on the splat)</summary>
+      <div class="row">
+        <label>Glass <select id="glass_mode"><option value="path" selected>refracting (path traced in athenea)</option>
+          <option value="browser">seen through (raster, browsers)</option></select></label>
+        <label>Surfel spacing <select id="glass_cell"><option value="1" selected>fine (most surfels)</option>
+          <option value="1.5">medium</option><option value="2">coarse (a quarter, lighter files)</option></select></label>
+      </div>
+    </details>
     <details><summary>Parts by hand (optional)</summary>
       <p class="hint">Instead of the automatic list: <code>material: part, part; material: part</code> with the
         library's names, e.g. <code>leather: the boots, the belt; polished steel: the helmet</code>.</p>
@@ -115,6 +151,14 @@
         <option value="rt">path traced (glass refracts)</option></select></label>
       <label>Light <select id="hdri"></select></label>
     </div>
+    <details><summary>Advanced (render)</summary>
+      <div class="row">
+        <label>Paths per pixel (path traced) <input id="spp" type="number" value="96" min="8" max="2048"></label>
+        <label>Camera height (degrees) <input id="elev" type="number" value="15" min="-30" max="80"></label>
+        <label>Camera distance (× size) <input id="dist" type="number" value="3.3" step="0.1" min="1.5" max="8"></label>
+        <label>Background grey <input id="grey" type="number" value="0.8" step="0.05" min="0" max="1"></label>
+      </div>
+    </details>
   </div>
 
   <div class="step" data-step="review">

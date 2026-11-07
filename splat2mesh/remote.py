@@ -42,18 +42,22 @@ def idol_mode(image: Path) -> str:
     return "real" if Path(image).suffix.lower() in {".jpg", ".jpeg"} else "synthetic"
 
 
-def idol_sample(image, work, gaussians: int = 262144, seed: int = 42) -> Path:
+def idol_sample(image, work, gaussians: int = 262144, seed: int = 42, mode: str | None = None, steps: int | None = None,
+                cfg_strength: float | None = None, rescale_t: float | None = None, dinov3_dtype: str | None = None) -> Path:
     """Picture → 3DGS .ply with Idol; also fetches Idol's prepared input and its estimate of the input camera."""
     image, work = Path(image), Path(work); work.mkdir(parents=True, exist_ok=True)
     host, osname, sdk = cfg("idol.host"), cfg("idol.os"), cfg("idol.sdk")
-    args = f"--mode {idol_mode(image)} --num_gaussians {gaussians} --seed {seed}"
+    mode = mode if mode in ("real", "synthetic") else idol_mode(image)
+    opt = [("--steps", steps), ("--cfg_strength", cfg_strength), ("--rescale_t", rescale_t), ("--dinov3_dtype", dinov3_dtype)]
+    extra = [x for k, v in opt if v not in (None, "") for x in (k, str(v))]       # Idol's own defaults otherwise
+    args = f"--mode {mode} --num_gaussians {gaussians} --seed {seed} " + " ".join(extra)
     if cfg("idol.weights"):
         args += f" --weights {cfg('idol.weights')}"
     stem = image.stem
     if host == "local":
         py = cfg("idol.python") or venv_python(Path(_x(sdk)) / ".venv")
         out = work / "idol"; out.mkdir(exist_ok=True)
-        argv = ["--mode", idol_mode(image), "--num_gaussians", str(gaussians), "--seed", str(seed)]
+        argv = ["--mode", mode, "--num_gaussians", str(gaussians), "--seed", str(seed), *extra]
         argv += ["--weights", _x(cfg("idol.weights"))] if cfg("idol.weights") else []
         _run([py, "-m", "idol.sample", "--image", str(image), "--out", str(out)] + argv
              + (["--no_optimize"] if WINDOWS else []),          # no torch.compile on Windows
