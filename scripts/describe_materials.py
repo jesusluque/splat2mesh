@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LIB = json.loads((ROOT / "splat2mesh/material_library.json").read_text())["materials"]
 NAMES = ", ".join(LIB)
 MID = "Qwen/Qwen3-VL-4B-Instruct"
-MAX_PARTS = 10
+MAX_PARTS = 12
 
 ap = argparse.ArgumentParser(); ap.add_argument("images", nargs="+"); ap.add_argument("--prompt", default="")
 ap.add_argument("--prompts-file", default=None); ap.add_argument("--out", default=None)
@@ -30,8 +30,8 @@ INSTR = ("You prepare inputs for a segmentation model that finds one object part
          "Rules:\n- Use only these material names: {names}.\n"
          "- Each part is a short noun phrase a segmenter can find, starting with 'the' (e.g. 'the lid', 'the handle', "
          "'the gold rim'). One part per phrase; do not join two parts with 'and'.\n"
-         "- 3 to 10 parts in total. Cover the whole object: first the parts that make up most of its visible surface "
-         "(the body, clothing, skin, hair, large panels or boards), then the smaller details; the largest part first "
+         "- 3 to 12 parts in total. Cover the whole object: first the parts that make up most of its visible surface "
+         "(the body, clothing, footwear, gloves, skin, hair, large panels or boards), then the smaller details; the largest part first "
          "within each material.\n"
          "- Always list visible glass or transparent parts (windows, lenses, dials' crystals, bulbs) as their own part.\n"
          "- A painted figurine or model: name the material each painted part represents (steel, wood, leather, "

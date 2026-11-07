@@ -44,6 +44,37 @@ if need:
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for d in need:
         (out / d.name / "materials.txt").write_text(Path(d / "idol_input.materials.txt").read_text())
+def complete_parts(desc, image, max_new=3):
+    """DeepSeek checks the description's coverage: it sees the picture and the part list and adds up to max_new large
+    visible parts that are missing (a 4B describer leaves out boots or a cloak), with library material names.
+    Unchanged when DeepSeek is not reachable."""
+    import re
+    from PIL import Image
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from gen_views import ds, img_url
+        have = [t.strip() for c in desc.split(";") if ":" in c for t in c.split(":", 1)[1].split(",")]
+        q = ("This is a picture of an object and the list of its parts used to assign materials: " + "; ".join(have) +
+             f". Name up to {max_new} LARGE visible parts that are missing from the list (each a short noun phrase "
+             "starting with 'the' that a segmentation model can find; not a part already listed under another name, "
+             "not tiny details). For each give its material, using only these names: " + ", ".join(LIB) +
+             ". If nothing large is missing, return an empty list. Answer JSON: {\"missing\": [{\"part\": ..., "
+             "\"material\": ...}]}")
+        ans = ds([{"type": "image_url", "image_url": {"url": img_url(Image.open(image))}}, {"type": "text", "text": q}])
+    except Exception as e:
+        print("coverage check skipped:", e, flush=True)
+        return desc
+    low = {h.lower() for h in have}
+    for m in ans.get("missing", [])[:max_new]:
+        part, mat = str(m.get("part", "")).strip().lower(), str(m.get("material", "")).strip().lower()
+        if not part or mat not in LIB or part in low:
+            continue
+        part = part if part.startswith("the ") else "the " + part
+        print(f"coverage check adds: {mat}: {part}", flush=True)
+        desc = desc + f"; {mat}: {part}"; low.add(part)
+    return desc
+
+
 def part_materials_from_prompt(desc, pr):
     """A part the prompt names with its material right before it ("a round grey stone base", "with a brass rim")
     takes that material. The part's noun must be the head of the phrase (followed by punctuation, the end or a
@@ -95,7 +126,7 @@ for d in items:
                 if len(missing) == 1:
                     m = missing[0]
         new.append(f"{m}: {things.strip()}")
-    f.write_text(part_materials_from_prompt("; ".join(new), pr))
+    f.write_text(part_materials_from_prompt(complete_parts("; ".join(new), d / "idol_input.png"), pr))
 # 3) ENEAS 3D + PBR per object
 summary = {}
 for d in items:

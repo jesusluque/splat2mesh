@@ -21,7 +21,7 @@ development machines, kept for the record.
 
 | Script | Status | What |
 |---|---|---|
-| `flow_batch.py` | core | the full materials flow on a folder of assets ([materials](materials.md)) |
+| `flow_batch.py` | core | the full materials flow on a folder of assets; `--gs` segments on the splat ([materials](materials.md)) |
 | `describe_materials.py` | core | Qwen3-VL-4B writes "material: part, part; …" from the picture and prompt |
 | `materials_eneas3d.py` | core | ENEAS on the orbit, overlap resolution, per-texel votes, maps, USD |
 | `eneas_seq.py` | core | runs on the ENEAS host: ground each phrase and track it through the frames |
@@ -91,6 +91,10 @@ the picture, generated on its own with Idol and placed back where it is in the w
 | Script | Status | What |
 |---|---|---|
 | `athenea_view.sh` | tool | one path-traced view of a USD asset |
+| `hdri_turntable.sh` | tool | athenea path-traced turntable under a studio HDRI, composited on grey, frames + MP4 (`START_DEG` = first azimuth) |
+| `splat_turntable.sh` | tool | turntable of the raw splat (athenea `render --splats`), frames + MP4 |
+| `uv_islands.py` | tool | UV-island check texture (one colour per chart, checker on top) and a `uv.usda` that uses it |
+| `make_video.py` | tool | social video (1080×1350) from a storyboard of stills, frame sequences and text cards |
 | `athenea_turntable.sh` | tool | path-traced turntable → MP4 |
 | `blender_turntable.py` | tool | turntable in Blender (EEVEE, HDRI) |
 | `gallery_stills.sh`, `exr_over.py`, `compose_gallery.py` | tool | gallery stills under a studio HDRI, composited on grey, into one sheet |

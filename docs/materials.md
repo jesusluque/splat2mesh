@@ -43,7 +43,10 @@ porcelain (glazed): the cat's body; gold: the bell, the coin; urushi lacquer: th
 ```
 
 **The prompt is the authority** on the specific material inside a family (applied by `flow_batch.py`; running
-`describe_materials.py` or `materials_eneas3d.py` alone does not apply it). If the prompt says brass and the model
+`describe_materials.py` or `materials_eneas3d.py` alone does not apply it). It also names the material of single
+parts: a part whose noun the prompt puts right after a material word ("a round grey **stone** base", "with a
+**brass** rim") takes that material. The noun must head its phrase: in "gold belt buckle" the gold is the buckle's,
+not the belt's. If the prompt says brass and the model
 says gold, it becomes brass. If the model names a family the prompt never mentions, it is replaced by the prompt's
 unused material (a bowl described as porcelain that the prompt calls urushi lacquer becomes lacquer).
 
@@ -61,16 +64,51 @@ baked texture.
 - A transparent material is also searched by its own name ("the glass"), because descriptions miss panes. That
   phrase only fills pixels no listed part claims, and it is dropped if it covers more than 30 % of the object.
 
-## 3. Overlapping masks
+### On the splat instead of the mesh (`--gs`, recommended)
 
-ENEAS sometimes grounds a phrase on too much: "the dragon's body" on the whole figurine, "the crystal" on the dragon
-and the crystal. `splat2mesh/overlap.py` decides every pixel that several masks claim, in this order:
+`flow_batch.py --gs` (or `materials_eneas3d.py … --gs SPLAT.ply`) segments the **splat**, not the textured mesh
+(`splat2mesh/gs_materials.py`):
+
+1. The splat is rendered with athenea (`render --splats`) on a 16-view orbit at 15° elevation, 1024 px, on white,
+   with depth and OpenCV cameras.
+2. The annotation frame is the orbit view nearest to the camera Idol predicted for the picture
+   (`idol_camera.json`): the side that was really seen. Colour similarity, used otherwise, picked the back of a
+   figure whose silhouette looks the same.
+3. ENEAS segments and tracks the phrases on those frames; masks are checked and resolved as below.
+4. **Votes per gaussian**: every gaussian centre is projected into every view and, where its depth matches the
+   rendered depth (within 1.5 % of the object radius), it takes a vote weighted by its opacity for the phrase
+   that covers that pixel. Gaussians no view sees take their neighbours' votes.
+5. **Texels inherit** the votes of their 8 nearest gaussians (Gaussian kernel over distance × opacity), so every
+   texel has votes; the per-texel rules below then run unchanged.
+6. The splat is written back with per-gaussian material attributes (`mat/splat_materials.ply`: `mat_id`,
+   `roughness`, `metallic`, `transmission`, `subsurface`, `ior`; names in `mat/mat_names.json`). Any other mesh of
+   the same splat can inherit them without running ENEAS again.
+
+On a dwarf figurine, 88 % of the gaussians got a direct vote; with the mesh orbit only 6–16 % of the texels did and
+the rest came from colour regions, which spread one metal over the shield, the boots and the base.
+
+Glass openings (`openings.py`) still read the mesh-orbit masks; with `--gs` they are not computed yet.
+
+## 3. Checking and resolving the masks
+
+**Check** (`overlap.verify`). DeepSeek sees the picture and one tile per phrase, with its mask in red on the
+annotation frame, and answers yes / partly / no for each. Masks that show another part ("the face" grounded on
+helmet and beard) are emptied; their class stays in the list. Answers are the majority of three calls.
+
+**Overlaps**
+
+ENEAS sometimes grounds a phrase on too much: "the dragon's body" on the whole figurine, "the chainmail" on the
+whole dwarf. `splat2mesh/overlap.py` splits the object's pixels on the annotation frame into 8 colour clusters
+(Lab k-means); DeepSeek names the listed part each cluster belongs to (majority of three calls; parts without a
+mask can own a cluster). Then every pixel that several masks claim, or that only unreliable masks claim, is
+decided in this order:
 
 1. **A reliable specific mask wins.** A mask is reliable if it is not the largest and does not overlap a bigger one
-   by more than IoU 0.5. Among reliable claimants, the smallest wins.
-2. **Otherwise colour decides.** The object's pixels on the annotation frame are split into 8 colour clusters
-   (Lab k-means). DeepSeek sees the picture and one tile per cluster and names the listed part each cluster
-   belongs to. The pixel goes to its cluster's part, if that part claims it.
+   by an IoU between 0.5 and 0.9 (above 0.9 two phrases were grounded on the same part: duplicates, not swollen).
+   Among reliable claimants, the one owning the pixel's colour cluster wins, otherwise the smallest.
+2. **Otherwise colour decides.** The pixel goes to its cluster's part if that part claims it, or if only
+   unreliable masks claim the pixel: a part ENEAS missed (a wooden shield inside "the chainmail") is recovered
+   from its colour.
 3. **Otherwise the smallest claimant** wins.
 
 The cluster sheet is saved as `mat/overlap_clusters.jpg`. Without a DeepSeek key this step is skipped and the
@@ -91,8 +129,9 @@ Masks are back-projected through the texel maps; every texel collects votes per 
 that sees it.
 
 - **Borders follow colour edges** (`refine_by_regions`). The texture is split into colour regions. A region only
-  admits the classes that hold at least **25 %** of its votes, plus the classes for which the region is home (it
-  holds at least **40 %** of the class's own votes). Votes then decide among the admitted classes. A mask that
+  admits the classes that hold at least **25 %** of its votes, plus the classes for which it is a home region
+  (the fewest regions that together hold **60 %** of the class's own votes; a steel helmet whose votes split over
+  two greys keeps both). Votes then decide among the admitted classes. A mask that
   spills over white porcelain cannot make it gold, and a small part whose mask is mostly right is not voted away
   by a bigger neighbour.
 - **Colour priors** recover thin parts the segmenter misses: kintsugi lines and gilt rims (hue of the metal's F0),

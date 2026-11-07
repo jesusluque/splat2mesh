@@ -76,6 +76,16 @@ the test objects named in each item; "cat" is the lucky-cat figurine of the tuto
 - **Web materials per part** gave jagged borders (each face takes its centre texel's part), visible as broken glass
   triangles around a dragon's eye. The web viewer now reads the per-texel maps instead.
 
+- **A character** (dwarf warrior figurine) exposed several generic weaknesses, all fixed generically:
+  "chainmail" was dropped as a thin part because it contains "chain" (whole-word match now); the describer allowed
+  only 2–6 parts and looped on a painted figurine (3–10 parts covering the object first, represented materials,
+  deduplicated); the library had no skin or hair; the home-region rule erased a helmet whose votes split over two
+  greys; the annotation frame chosen by colour was the figure's back, so ENEAS grounded "the shield face" on the
+  base (frame from Idol's camera now); masks are checked by DeepSeek before resolving, and its answers are a
+  majority of three because single answers changed the result from run to run.
+- **Materials on the splat** (`--gs`): voting per gaussian gave direct votes to 88 % of the gaussians against 6–16 %
+  of the texels with the mesh orbit, and removed the metal spreading over unvoted texels.
+
 ## Rendering for the gallery
 
 - Polished metals need something to reflect: under a flat grey dome they looked transparent. Stills use a studio
