@@ -66,19 +66,35 @@ def run(cmd, comp: str, env=None, cwd=None, check=True) -> str:
     return "".join(out)
 
 
-def download(url: str, dst: Path, comp: str, lo: float, hi: float, sha256: str | None = None) -> Path:
+def download(url: str, dst: Path, comp: str, lo: float, hi: float, sha256: str | None = None,
+             attempts: int = 6) -> Path:
+    """Downloads with retries; a broken transfer resumes where it stopped (HTTP Range)."""
+    import time
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists() and (not sha256 or _sha(dst) == sha256):
         progress(hi, comp, f"{dst.name} already downloaded"); return dst
     tmp = dst.with_suffix(dst.suffix + ".part")
-    with urllib.request.urlopen(url) as r, open(tmp, "wb") as f:
-        total = int(r.headers.get("Content-Length") or 0); got = 0; last = -1
-        while chunk := r.read(1 << 20):
-            f.write(chunk); got += len(chunk)
-            if total:
-                pct = lo + (hi - lo) * got / total
-                if int(pct) != last:
-                    last = int(pct); progress(pct, comp, f"downloading {dst.name} {got >> 20}/{total >> 20} MB")
+    for k in range(attempts):
+        try:
+            have = tmp.stat().st_size if tmp.exists() else 0
+            req = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                if have and r.status != 206:                 # the server ignored the range: start again
+                    have = 0
+                total = have + int(r.headers.get("Content-Length") or 0); got = have; last = -1
+                with open(tmp, "ab" if have else "wb") as f:
+                    while chunk := r.read(1 << 20):
+                        f.write(chunk); got += len(chunk)
+                        if total:
+                            pct = lo + (hi - lo) * got / total
+                            if int(pct) != last:
+                                last = int(pct); progress(pct, comp, f"downloading {dst.name} {got >> 20}/{total >> 20} MB")
+            break
+        except Exception as e:
+            if k == attempts - 1:
+                raise RuntimeError(f"{comp}: download of {dst.name} failed: {e}")
+            progress(lo, comp, f"download interrupted ({str(e)[:80]}), retrying in {5 * (k + 1)} s")
+            time.sleep(5 * (k + 1))
     if sha256 and _sha(tmp) != sha256:
         tmp.unlink(); raise RuntimeError(f"{comp}: {dst.name} checksum mismatch")
     tmp.replace(dst)
