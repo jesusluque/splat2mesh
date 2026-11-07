@@ -241,7 +241,7 @@ def get(repo, **kw):     # a gated repo without a token: the copy already in the
         try:
             return snapshot_download(repo, local_files_only=True, **kw)
         except Exception:
-            raise SystemExit(f"{{repo}}: {{e}}\nAccept its terms on huggingface.co/{{repo}} and give a token.")
+            raise SystemExit(f"{{repo}}: {{e}} -- accept its terms on huggingface.co/{{repo}} and give a token.")
 get("{DINOV3}")
 get("{VAE[vae]}", allow_patterns=["vae/*"])
 print("weights ok")
