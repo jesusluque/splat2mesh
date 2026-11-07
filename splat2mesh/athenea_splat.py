@@ -36,6 +36,10 @@ def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False) -> di
         dc = ((alb - 0.5) / SH_C0).astype(np.float32)
     else:
         dc = np.stack([v[f"f_dc_{i}"] for i in range(3)], 1).astype(np.float32)
+    if y_down:      # Idol / COLMAP: turn 180° about X in the data itself (some readers ignore prim transforms)
+        xyz = xyz * np.array([1, -1, -1], np.float32)
+        w, x, y, z = q.T                         # (0,1,0,0) ⊗ (w,x,y,z) = (-x, w, -z, y)
+        q = np.stack([-x, w, -z, y], 1)
     attr = lambda k, d: np.asarray(v[k], np.float32) if k in v.dtype.names else np.full(n, d, np.float32)
     metal, rough, trans, ior = attr("metallic", 0), attr("roughness", 0.5), attr("transmission", 0), attr("ior", 1.5)
     # one prim per ior among transmitting gaussians (athenea's ior is one per prim); opaque ones in a prim of their own
@@ -43,8 +47,6 @@ def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False) -> di
     stage = Usd.Stage.CreateNew(str(out))
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y); UsdGeom.SetStageMetersPerUnit(stage, 1.0)
     root = UsdGeom.Xform.Define(stage, "/Splat"); stage.SetDefaultPrim(root.GetPrim())
-    if y_down:                                   # Idol / COLMAP splats: turn 180° about X, like the meshes
-        root.AddRotateXOp().Set(180.0)
     groups = {}
     for gi, k in enumerate(sorted(np.unique(key))):
         sel = np.nonzero(key == k)[0]

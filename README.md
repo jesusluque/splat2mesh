@@ -40,7 +40,11 @@ From a splat you already have (CPU only):
 .venv/bin/python scripts/splat2usd.py my_object.ply --direct --out out/demo   # --y-down for COLMAP/Idol .ply
 ```
 
-From a picture (needs Idol on a CUDA host reachable by ssh, see [docs/setup.md](docs/setup.md)):
+Machine-specific settings (renderer, GPU hosts, DeepSeek key) live in one file: copy
+`splat2mesh.example.toml` to `splat2mesh.toml` and see [docs/setup.md](docs/setup.md). The renderer, athenea, is a
+submodule: `git submodule update --init third_party/athenea`, then build it as described there.
+
+From a picture (needs Idol, locally or on a CUDA host reachable by ssh):
 
 ```sh
 .venv/bin/python scripts/splat2usd.py lucky_cat.png --direct --out out/demo
