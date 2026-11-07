@@ -17,6 +17,10 @@ spec = asset / "mat" / "regions.json"
 if not spec.exists():
     prepare(asset, image, spec, prompt=desc)
 orbit = render_orbit(asset, asset / "mat" / "orbit")
+# --gs SPLAT.ply: ENEAS on athenea renders of the splat and votes per gaussian (splat2mesh/gs_materials.py); the
+# texels then inherit the votes of their nearest gaussians. Masks are kept apart (other frames).
+GS = Path(sys.argv[sys.argv.index("--gs") + 1]) if "--gs" in sys.argv else None
+MASKS = "masks_gs.npz" if GS else "masks.npz"
 # annotate on the orbit frame that looks most like the input image (the side the generator really saw)
 def obj_crop(path, bg_dark):
     a = np.asarray(Image.open(path).convert("RGB"), np.float32)
@@ -26,7 +30,22 @@ def obj_crop(path, bg_dark):
     return np.asarray(Image.fromarray(a.astype(np.uint8)).resize((96, 96)), np.float32)
 ref = obj_crop(image, bg_dark=True)                                 # Idol input: object on black
 frames = sorted((orbit / "frames").glob("*.jpg"))
+if GS:
+    from splat2mesh.gs_materials import render_orbit_gs
+    frames = render_orbit_gs(GS, asset / "mat" / "gs_orbit")
 score = [-np.abs(obj_crop(f, bg_dark=False) - ref).mean() for f in frames]
+# the splat orbit has its cameras: the frame nearest to the camera Idol predicted for the input picture is the
+# side that was really seen (colour alone can pick the back of a figure whose silhouette looks the same)
+_cam = image.parent / "idol_camera.json"
+if GS and _cam.exists():
+    import math as _m
+    _c = json.loads(_cam.read_text()); _y, _p = _c["yaw"], _c["pitch"]
+    _d = np.array([_m.cos(_p) * _m.sin(_y), _m.sin(_p), -_m.cos(_p) * _m.cos(_y)])     # Idol → USD (components.idol_view)
+    _meta = json.loads((asset / "mat" / "gs_orbit" / "cameras.json").read_text())
+    _eye = np.array([v["eye"] for v in _meta["views"]]) - np.array(_meta["centre"])
+    _eye /= np.linalg.norm(_eye, axis=1, keepdims=True)
+    score = list(_eye @ _d)
+    print("annotation frame from Idol's camera", flush=True)
 ann = frames[int(np.argmax(score))].name
 ann2 = frames[(int(np.argmax(score)) + len(frames) // 2) % len(frames)].name   # opposite side, tracked too
 print("annotation frame scores (best 3):", sorted(zip(score, [f.name for f in frames]))[-3:])
@@ -45,10 +64,10 @@ if LINUX:
     win = f"splat2mesh_eneas/jobs/{tag}"; wsl = f"$HOME/{win}"
 else:
     win = f"C:/splat2mesh/eneas_jobs/{tag}"; wsl = "/mnt/c/" + win[3:]
-reuse = "--reuse-masks" in sys.argv and (asset / "mat" / "masks.npz").exists()
+reuse = "--reuse-masks" in sys.argv and (asset / "mat" / MASKS).exists()
 run_items = items
 if reuse:                     # only the phrases the saved masks do not have yet
-    have = set(np.load(asset / "mat" / "masks.npz").files)
+    have = set(np.load(asset / "mat" / MASKS).files)
     run_items = [(c, t) for c, t in items if t not in have]
     if run_items:
         print("ENEAS for new phrases only:", [t for _, t in run_items])
@@ -83,11 +102,11 @@ if not reuse or run_items:
    print(subprocess.run(["ssh", HOST, cmd], capture_output=True, text=True, timeout=5400).stdout.replace("\x00", "")[-1500:])
    if reuse:                 # merge the new phrases into the saved masks
        subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(asset / "mat" / "masks_new.npz")], check=True)
-       merged = {**dict(np.load(asset / "mat" / "masks.npz")), **dict(np.load(asset / "mat" / "masks_new.npz"))}
-       np.savez_compressed(asset / "mat" / "masks.npz", **merged); (asset / "mat" / "masks_new.npz").unlink()
+       merged = {**dict(np.load(asset / "mat" / MASKS)), **dict(np.load(asset / "mat" / "masks_new.npz"))}
+       np.savez_compressed(asset / "mat" / MASKS, **merged); (asset / "mat" / "masks_new.npz").unlink()
    else:
-       subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(asset / "mat" / "masks.npz")], check=True)
-z = np.load(asset / "mat" / "masks.npz")
+       subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(asset / "mat" / MASKS)], check=True)
+z = np.load(asset / "mat" / MASKS)
 def _fit(m, n):            # ENEAS may return fewer frames than sent: pad with empty views
     if m.shape[0] >= n:
         return m[:n]
@@ -97,7 +116,7 @@ masks = {f"{cls}|{ph}": _fit(z[ph], len(frames)) for cls, ph in items if ph in z
 # crystal): resolved per pixel by reliable specific masks, then colour clusters named by DeepSeek (splat2mesh/overlap)
 if "--no-overlap" not in sys.argv and len(masks) > 1:
     try:
-        from splat2mesh.overlap import resolve
+        from splat2mesh.overlap import resolve, verify
         sys.path.insert(0, str(ROOT / "scripts"))
         from gen_views import ds as _ds, img_url as _img_url
         _ask = lambda sheet, q: _ds([{"type": "image_url", "image_url": {"url": _img_url(sheet)}}, {"type": "text", "text": q}])
@@ -105,8 +124,14 @@ if "--no-overlap" not in sys.argv and len(masks) > 1:
         # after the listed parts are settled (rule below), not in the vote, where they grab look-alike colours
         _auto = {f"{c}|{t}" for c, t in auto_items}
         _listed = {k: v for k, v in masks.items() if k not in _auto}
-        _res, _orep, _osheet = resolve(_listed, frames, frames.index(next(f for f in frames if f.name == ann)), image,
-                                       {k: k.split("|", 1)[1] for k in _listed}, _ask)
+        _ai = frames.index(next(f for f in frames if f.name == ann))
+        _parts = {k: k.split("|", 1)[1] for k in _listed}
+        # each mask checked first: a phrase ENEAS grounded on another part is emptied (its class stays listed)
+        _listed, _vans, _vsheet = verify(_listed, frames, _ai, image, _parts, _ask)
+        print("mask check:", _vans, flush=True)
+        if _vsheet is not None:
+            _vsheet.save(asset / "mat" / "mask_check.jpg", quality=85)
+        _res, _orep, _osheet = resolve(_listed, frames, _ai, image, _parts, _ask)
         masks = {k: (_res[k] if k in _res else v) for k, v in masks.items()}
         print("overlap resolved:", _orep, flush=True)
         if _osheet is not None:
@@ -157,7 +182,7 @@ for c, t in auto_items:
     else:
         masks[k] = masks[k] & ~others
 # the masks as decided here (after the drops) are what later steps (glass openings) must use, not the raw ones
-np.savez_compressed(asset / "mat" / "masks_used.npz", **{k.split("|", 1)[1]: v for k, v in masks.items()})
+np.savez_compressed(asset / "mat" / ("masks_used_gs.npz" if GS else "masks_used.npz"), **{k.split("|", 1)[1]: v for k, v in masks.items()})
 print("annotation frame", ann, "| phrases", list(masks))
 if not masks:          # ENEAS found nothing: whole object = the description's main material
     import json as _j
@@ -171,6 +196,13 @@ if not masks:          # ENEAS found nothing: whole object = the description's m
     spec.write_text(_j.dumps(sp, indent=1))
     from splat2mesh.materials import apply
     print({"seen_texels": 0, "fallback": main}); print(apply(spec)); sys.exit(0)
-print(from_view_masks(spec, orbit, masks))
+if GS:
+    from splat2mesh.gs_materials import vote_gaussians, texel_votes, write_ply
+    votes_g, _ = vote_gaussians(GS, asset / "mat" / "gs_orbit", masks)
+    R = Image.open(asset / "basecolor.png").size[0]
+    print("splat materials:", write_ply(GS, asset / "mat" / "splat_materials.ply", votes_g, list(masks)))
+    print(from_view_masks(spec, orbit, masks, votes=texel_votes(asset, GS, votes_g, R)))
+else:
+    print(from_view_masks(spec, orbit, masks))
 print(apply_texel_classes(spec))
 print('parts', export_parts(asset), export_parts(asset, 'asset_materials.usda', group='material'))

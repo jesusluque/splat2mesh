@@ -328,7 +328,7 @@ def render_orbit(asset_dir, out_dir, n: int = 16, elevation: float = 15.0, size:
     return out_dir
 
 
-def refine_by_regions(tex, mask, votes, spec, classes, min_share: float = 0.25, pos=None, home_share: float = 0.4):
+def refine_by_regions(tex, mask, votes, spec, classes, min_share: float = 0.25, pos=None, home_share: float = 0.6):
     """Material borders follow colour borders. In each colour region only the material classes holding at least
     min_share of that region's votes are allowed; each texel takes the allowed part with most votes at that
     texel (or the region's majority part when unseen). White texels cannot become gold because a phrase mask
@@ -337,16 +337,19 @@ def refine_by_regions(tex, mask, votes, spec, classes, min_share: float = 0.25, 
     C = np.array([r["lab"] for r in spec["regions"]])
     reg = ((_srgb_to_lab(tex)[..., None, :] - C[None, None]) ** 2).sum(-1).argmin(-1)
     out = np.full(mask.shape, -1)
-    # a class is also allowed in the region holding most of its own votes: a small part (horns) or one sharing its
-    # colour with a bigger one (lavender crystal next to lavender wings) is never a majority anywhere, but it lives
-    # somewhere
+    # a class is also allowed in its home regions: the fewest regions that together hold home_share of its own
+    # votes. A small part (horns) or one sharing its colour with a bigger one (lavender crystal next to lavender
+    # wings, a steel helmet next to grey chainmail) is never a majority anywhere, but it lives somewhere; with
+    # coarse colour regions its votes may also be split over two of them (two greys), so one region is not enough
     cls_names = sorted(set(classes))
     home = {}
     for c in cls_names:
         ks = [k for k in range(K) if classes[k] == c]
         per_reg = np.array([votes[ks][:, mask & (reg == j)].sum() for j in range(len(C))])
-        if per_reg.sum() > 0 and per_reg.max() >= home_share * per_reg.sum():
-            home[c] = int(per_reg.argmax())
+        if per_reg.sum() <= 0:
+            continue
+        order = np.argsort(-per_reg); cum = np.cumsum(per_reg[order]) / per_reg.sum()
+        home[c] = {int(j) for j in order[:int(np.searchsorted(cum, home_share)) + 1]}
     for j in range(len(C)):
         sel = mask & (reg == j)
         if not sel.any():
@@ -360,7 +363,7 @@ def refine_by_regions(tex, mask, votes, spec, classes, min_share: float = 0.25, 
             per_cls[classes[k]] = per_cls.get(classes[k], 0) + per_part[k]
         tot = sum(per_cls.values())
         allowed_cls = {c for c, w in per_cls.items() if w >= min_share * tot} or {max(per_cls, key=per_cls.get)}
-        allowed_cls |= {c for c, h in home.items() if h == j and per_cls.get(c, 0) > 0}
+        allowed_cls |= {c for c, h in home.items() if j in h and per_cls.get(c, 0) > 0}
         allowed = np.array([classes[k] in allowed_cls for k in range(K)])
         vv = np.where(allowed[:, None], v, -1)
         lab_t = vv.argmax(0)
@@ -406,15 +409,18 @@ def refine_by_colour(tex, mask, votes, cls_tex, conf: float = 0.75, prior_w: flo
     return out
 
 
-def from_view_masks(spec_json, orbit_dir, masks: dict) -> dict:
+def from_view_masks(spec_json, orbit_dir, masks: dict, votes=None) -> dict:
     """masks = {"class|phrase": [n_views HxW bool]}: back-project every view's masks to texels (smallest mask wins
-    per pixel), vote per texel; texels no view saw take the majority class of their colour region."""
+    per pixel), vote per texel; texels no view saw take the majority class of their colour region.
+    votes: [n_phrases, R*R] texel votes computed elsewhere (gs_materials.texel_votes: from the splat's gaussians);
+    the back-projection is then skipped and only the rules below run."""
     spec_p = Path(spec_json); spec = json.loads(spec_p.read_text())
-    tmaps = np.load(Path(orbit_dir) / "texel_maps.npy")
     tex, mask = _texture_and_mask(Path(spec["asset"]))
     R = tex.shape[0]
     names = list(masks)
-    votes = np.zeros((len(names), R * R), np.float32)
+    tmaps = np.load(Path(orbit_dir) / "texel_maps.npy") if votes is None else np.zeros((0,))
+    if votes is None:
+        votes = np.zeros((len(names), R * R), np.float32)
     for vi in range(tmaps.shape[0]):
         tm = tmaps[vi]
         label = np.full(tm.shape, -1)
