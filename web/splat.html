@@ -97,6 +97,7 @@
     if (info.description) document.querySelector(".hud p").textContent = info.description;
     // in a gallery card (gui=0) the card shows the title and text: only the status line stays over the model
     if (params.get("gui") === "0") document.querySelectorAll(".hud h1, .hud p").forEach((e) => { e.style.display = "none"; });
+    if (params.get("gui") === "0") Object.assign(document.querySelector(".hud").style, { maxWidth: "calc(100% - 64px)", fontSize: "11px" });   // clear of the card's maximise button
     const clouds = info.clouds ?? [{ file: `${model}.athc` }];
     const meshes = clouds.map((c, i) => {
       const m = new SplatMesh({ url: `./models/${c.file}`, extSplats: true, onProgress: download.track(`cloud${i}`) });
