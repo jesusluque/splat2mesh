@@ -234,8 +234,16 @@ w = snapshot_download("speridlabs/idol", local_dir=r"{w}")
 cfg = json.load(open(os.path.join(w, "config.json")))
 cfg["image_encoders"]["flux2_vae"] = "{VAE[vae]}"
 json.dump(cfg, open(os.path.join(w, "config.json"), "w"), indent=1)
-snapshot_download("{DINOV3}")
-snapshot_download("{VAE[vae]}", allow_patterns=["vae/*"])
+def get(repo, **kw):     # a gated repo without a token: the copy already in the cache, if there is one
+    try:
+        return snapshot_download(repo, **kw)
+    except Exception as e:
+        try:
+            return snapshot_download(repo, local_files_only=True, **kw)
+        except Exception:
+            raise SystemExit(f"{{repo}}: {{e}}\nAccept its terms on huggingface.co/{{repo}} and give a token.")
+get("{DINOV3}")
+get("{VAE[vae]}", allow_patterns=["vae/*"])
 print("weights ok")
 """
     run([py, "-c", script], c)
