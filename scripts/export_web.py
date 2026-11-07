@@ -4,6 +4,9 @@ AR Quick Look; plus the source image.
 
     python scripts/export_web.py OUTDIR NAME=ASSET_DIR[:TITLE[:SOURCE_IMAGE[:POSTER[:SPLAT.ply]]]] [...] [--materials texture|parts]
 SPLAT.ply (Idol, Y-down): written as models/NAME.splat; the viewer gets a Mesh | Splat switch.
+NAME=page:URL|TITLE|SOURCE_IMAGE|POSTER|NOTE: a card that opens a page inside it (splat.html?model=NAME: a
+relightable splat in Spark WebGPU; its models/NAME.athc and NAME.json are prepared beforehand). Every card has a
+maximize button.
 --materials texture (default): one mesh, materials per texel (transmission, roughness, metalness maps); parts: one
 mesh prim per part with its own material (faces take their centre texel's part: jagged borders on small features).
 ASSET_DIR holds asset.usda + its textures (+ report.json in it or its parent).
@@ -181,6 +184,16 @@ for _, h in HDRS:
 cards = []
 for spec in sys.argv[2:]:
     name, rest = spec.split("=", 1)
+    if rest.startswith("page:"):        # a card that opens a page of its own (e.g. splat.html?model=NAME), no mesh
+        url, title, img, poster, note = (rest[len("page:"):].split("|") + [""] * 5)[:5]
+        if poster and Path(poster).exists():
+            Image.open(poster).convert("RGB").resize((640, 640), Image.LANCZOS).save(out / "models" / f"{name}_poster.jpg", quality=86)
+        if img and Path(img).exists():
+            Image.open(img).convert("RGB").resize((512, 512), Image.LANCZOS).save(out / "models" / f"{name}_input.jpg", quality=85)
+        cards.append((name, title or name, bool(img and Path(img).exists()), {"page": url, "note": note,
+                                                                         "poster": bool(poster and Path(poster).exists())}))
+        print(name, "page", url)
+        continue
     parts = rest.split(":")
     src = Path(parts[0]); title = parts[1] if len(parts) > 1 and parts[1] else name
     img = Path(parts[2]) if len(parts) > 2 and parts[2] else None
@@ -225,6 +238,16 @@ for spec in sys.argv[2:]:
 
 items = []
 for name, title, has_img, rep in cards:
+    if rep.get("page"):
+        src_img = f'<img class="src" src="models/{name}_input.jpg" alt="input image">' if has_img else ""
+        items.append(f'''<article>
+  <div class="view" data-page="{html.escape(rep['page'])}&amp;gui=0" tabindex="0" role="button" aria-label="Load {html.escape(title)}">
+    {f'<img class="poster" src="models/{name}_poster.jpg" alt="{html.escape(title)}" loading="lazy">' if rep.get("poster") else ""}
+    <span class="hint">Click to load the relightable splat (WebGPU)</span></div>
+  <div class="meta">{src_img}<div><h2>{html.escape(title)}</h2><p>{html.escape(rep.get('note', ''))}</p>
+  <p class="dl"><a href="{html.escape(rep['page'])}">Full page with HDRI picker</a></p></div></div>
+</article>''')
+        continue
     stats = f"{rep.get('faces', 0):,} faces · {rep.get('uv_charts', '?')} UV charts"
     if rep.get("boundary_edges") == 0 and rep.get("non_manifold_edges") == 0:
         stats += " · closed manifold"
@@ -263,6 +286,11 @@ article {{ background:var(--card); border:1px solid var(--line); border-radius:1
 .view.live .poster, .view.live .hint {{ display:none }}
 .view .mode {{ position:absolute; top:10px; right:10px; display:none; gap:4px; z-index:2 }} .view.live .mode {{ display:flex }}
 .view .mode button {{ font:inherit; font-size:12px; padding:3px 10px; border-radius:16px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer }} .view .mode button.on {{ background:var(--accent); color:#fff; border-color:var(--accent) }}
+.view iframe {{ position:absolute; inset:0; width:100%; height:100%; border:0 }}
+.max-btn {{ position:absolute; top:8px; right:8px; z-index:3; border:0; border-radius:6px; padding:4px 8px; background:rgba(0,0,0,.55); color:#fff; font:14px system-ui; cursor:pointer; display:none }}
+.view.live .max-btn {{ display:block }}
+.view.is-max {{ position:fixed; inset:0; z-index:1000; width:100vw !important; height:100dvh !important; background:#000; margin:0 }}
+body.has-max {{ overflow:hidden }}
 .view .msg {{ position:absolute; inset:0; display:grid; place-items:center; color:var(--muted); font-size:13px }}
 .meta {{ display:flex; gap:12px; padding:12px 14px; align-items:flex-start }} .src {{ width:64px; height:64px; object-fit:cover; border-radius:8px; border:1px solid var(--line) }}
 h2 {{ font-size:16px; margin:0 0 2px }} .meta p {{ margin:0; color:var(--muted); font-size:13px }} .dl a {{ color:var(--accent) }}
@@ -378,12 +406,28 @@ function view(el) {{
   r.setAnimationLoop(() => {{ if (!visible) return; ctl.update(); r.render(scene, cam); }});
   el.__dispose = () => {{ r.setAnimationLoop(null); r.dispose(); r.forceContextLoss(); const i = viewers.indexOf(setHdr); if (i >= 0) viewers.splice(i, 1); }};
 }}
+function addMax(el, onResize) {{   // ⤢ / ✕: the card's viewer to the whole window (fullscreen API where there is one)
+  if (el.querySelector(".max-btn")) return;
+  const b = document.createElement("button"); b.className = "max-btn"; b.title = "Maximize"; b.textContent = "⤢"; el.appendChild(b);
+  const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+  const set = (on) => {{ el.classList.toggle("is-max", on); document.body.classList.toggle("has-max", on); b.textContent = on ? "✕" : "⤢"; requestAnimationFrame(() => onResize && onResize()); }};
+  b.onclick = (e) => {{ e.stopPropagation();
+    if (el.classList.contains("is-max")) {{ if (fsEl()) (document.exitFullscreen || document.webkitExitFullscreen).call(document); set(false); return; }}
+    const req = el.requestFullscreen || el.webkitRequestFullscreen; set(true); if (req) Promise.resolve(req.call(el)).catch(() => {{}}); }};
+  const sync = () => {{ if (!fsEl() && el.classList.contains("is-max") && document.fullscreenEnabled !== undefined) set(false); }};
+  document.addEventListener("fullscreenchange", sync); document.addEventListener("webkitfullscreenchange", sync);
+  addEventListener("keydown", (e) => {{ if (e.key === "Escape" && el.classList.contains("is-max")) set(false); }});
+}}
+function page(el) {{   // a page of its own (the relightable splat viewer) inside the card
+  const f = document.createElement("iframe"); f.src = el.dataset.page; f.allow = "fullscreen"; f.loading = "lazy"; el.appendChild(f);
+  el.__dispose = () => f.remove();
+}}
 const live = [];
 document.querySelectorAll(".view").forEach(el => {{
   const go = () => {{ if (el.classList.contains("live")) return;
     if (live.length >= 4) {{ const old = live.shift(); old.__dispose && old.__dispose(); old.classList.remove("live");
-      old.querySelectorAll("canvas, .msg").forEach(n => n.remove()); }}
-    el.classList.add("live"); live.push(el); view(el); }};
+      old.querySelectorAll("canvas, .msg, iframe, .max-btn").forEach(n => n.remove()); }}
+    el.classList.add("live"); live.push(el); if (el.dataset.page) page(el); else view(el); addMax(el, () => window.dispatchEvent(new Event("resize"))); }};
   el.addEventListener("click", go);
   el.addEventListener("keydown", e => {{ if (e.key === "Enter" || e.key === " ") {{ e.preventDefault(); go(); }} }});
 }});

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  One relightable splat from splat2mesh: the Idol splat with per-gaussian materials (albedo, metallic, roughness)
+  found on the splat itself, relit live under any HDRI by athenea's relighting code in Spark's WebGPU backend
+  (the viewer of sparkwebgpu.lucab.co.uk).
+    ?model=<name>   models/<name>.athc  (athenea .athc v3, relight + linear)
+    ?hdri=<name>    ?hdriBase=<url/>    ?view=agx|aces2|standard    ?gui=0    ?az=<deg> (front azimuth)
+-->
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Relightable splat · splat2mesh</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./site.css">
+  <style>.hud h1 a { text-decoration:none }</style>
+</head>
+
+<body>
+  <div class="hud">
+    <h1><a href="./">&larr;</a> <span id="title">Relightable splat</span></h1>
+    <p>The Idol splat with materials found per gaussian (splat2mesh), relit live under the HDRI.</p>
+    <p class="help">Drag to orbit · scroll or pinch to zoom</p>
+    <div class="stats" id="stats">loading…</div>
+  </div>
+  <div class="credits">
+    Made with <a href="https://github.com/jesusluque/splat2mesh">splat2mesh</a> (Idol, ENEAS, Iris-3B by speridlabs) ·
+    relit with athenea's code in <a href="https://github.com/jesusluque/sparkwebgpu-public">Spark WebGPU</a> ·
+    HDRIs from <a href="https://polyhaven.com">Poly Haven</a> (CC0) ·
+    <a href="https://github.com/sparkjsdev/spark">Spark</a> (MIT) · <a href="https://threejs.org">three.js</a> (MIT) · <a href="https://lil-gui.georgealways.com">lil-gui</a> (MIT)
+  </div>
+  <canvas id="canvas" tabindex="0"></canvas>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/three.module.min.js",
+        "three/webgpu": "./vendor/three/three.webgpu.min.js",
+        "three/addons/": "./vendor/three/addons/",
+        "lil-gui": "./vendor/lil-gui/lil-gui.esm.min.js",
+        "@sparkjsdev/spark": "./vendor/spark/150d926a74f3/spark.module.min.js",
+        "@sparkjsdev/spark/webgpu": "./vendor/spark/150d926a74f3/spark.webgpu.module.min.js"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from "three/webgpu";
+    import GUI from "lil-gui";
+    import { HDRLoader } from "three/addons/loaders/HDRLoader.js";
+    import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { HALF_MAX, HDRI_BASE, HDRIS_4K, downloadProgress, fullResHdri, hdriDome, hdriPicker, requireWebGPU } from "./site.js";
+    import { splatRequiredLimits, fx, plugins, atheneaRelightPlugin, atheneaOutputPlugin } from "@sparkjsdev/spark/webgpu";
+
+    const params = new URLSearchParams(location.search);
+    const model = (params.get("model") ?? "dwarf_warrior").replace(/[^\w-]/g, "");
+    const hdriBase = params.get("hdriBase") ?? HDRI_BASE;
+    const status = document.getElementById("stats");
+    document.getElementById("title").textContent = model.replace(/_/g, " ");
+    window.__splat = { loaded: false, error: null };
+
+    const adapter = await requireWebGPU();
+    const download = downloadProgress({ match: (url) => /\.(athc|hdr)(\?|$)/.test(url), expectedBytes: 50 * 1024 * 1024 });
+    const renderer = new THREE.WebGPURenderer({
+      canvas: document.getElementById("canvas"),
+      requiredLimits: adapter ? splatRequiredLimits(adapter) : {},
+    });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    await renderer.init();
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(2 * THREE.MathUtils.radToDeg(Math.atan(18 / 50)), innerWidth / innerHeight, 0.01, 20);
+    const target = new THREE.RenderTarget(1, 1, { type: THREE.HalfFloatType, depthTexture: new THREE.DepthTexture(1, 1) });
+    const output = new THREE.QuadMesh(new THREE.MeshBasicNodeMaterial({ colorNode: THREE.TSL.texture(target.texture) }));
+    const chain = new fx.FxChain(renderer.backend.device);
+    function resize() {
+      camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+      const size = renderer.getDrawingBufferSize(new THREE.Vector2()); target.setSize(size.x, size.y);
+    }
+    resize(); addEventListener("resize", resize);
+
+    // the dome behind the splat: the image the relighting reads, turned with it
+    const { TSL } = THREE;
+    const hdrLoader = new HDRLoader();
+    const turn = TSL.uniform(new THREE.Vector2(1, 0));
+    const intensity = TSL.uniform(1);
+    const dome = hdriDome(THREE, TSL.positionWorld.sub(TSL.cameraPosition).normalize(), turn);
+    const backdrop = new THREE.Mesh(new THREE.SphereGeometry(8, 64, 32), new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide, depthWrite: false }));
+    backdrop.material.colorNode = TSL.min(dome.color.mul(intensity), TSL.vec3(HALF_MAX));
+    scene.add(backdrop);
+
+    const spark = new SparkRenderer({ renderer, hdr: true });
+    scene.add(spark);
+    const splat = new SplatMesh({ url: `./models/${model}.athc`, extSplats: true, onProgress: download.track("splat") });
+    scene.add(splat);
+    const relight = atheneaRelightPlugin({ pixelDetail: false });
+    const display = atheneaOutputPlugin({ view: params.get("view") ?? "agx", exposure: 0 });
+    let host = null;
+
+    const state = { hdri: fullResHdri(params.get("hdri") ?? "brown_photostudio_02_4k.hdr"), rotation: 0, intensity: 1 };
+    const hdris = HDRIS_4K.includes(state.hdri) ? HDRIS_4K : [state.hdri, ...HDRIS_4K];
+    async function setHdri(name) {
+      state.hdri = name; status.textContent = `loading ${name}…`;
+      const tex = await hdrLoader.setDataType(THREE.FloatType).loadAsync(`${hdriBase}${name}`);
+      const { width, height, data } = tex.image;
+      relight.set({ hdri: { width, height, data, channels: 4 } });
+      dome.set(tex); applySky();
+    }
+    function applySky() {
+      relight.set({ rotation: THREE.MathUtils.degToRad(state.rotation), intensity: state.intensity, indirect: true });
+      const r = THREE.MathUtils.degToRad(state.rotation); turn.value.set(Math.cos(r), Math.sin(r));
+      intensity.value = state.intensity;
+    }
+
+    try {
+      await setHdri(state.hdri);
+      await splat.initialized;
+      await spark.webgpuReady;
+      window.__splat.loaded = true;
+    } catch (error) { window.__splat.error = String(error); status.textContent = `error: ${error}`; console.error(error); }
+    download.done();
+
+    // frame the cloud from its front (the side the picture showed)
+    // bounds and the front azimuth from models/<name>.json (written with the .athc)
+    const info = await fetch(`./models/${model}.json`).then((r) => r.json()).catch(() => ({}));
+    const box = new THREE.Box3(new THREE.Vector3(...(info.boundsMin ?? [-0.5, -0.5, -0.5])), new THREE.Vector3(...(info.boundsMax ?? [0.5, 0.5, 0.5])));
+    const c = box.getCenter(new THREE.Vector3()), rad = box.getSize(new THREE.Vector3()).length() / 2;
+    const az = THREE.MathUtils.degToRad(Number(params.get("az") ?? info.frontAzimuthDeg ?? 0)), el = THREE.MathUtils.degToRad(12);
+    const dist = rad / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.05;
+    camera.position.set(c.x + dist * Math.sin(az) * Math.cos(el), c.y + dist * Math.sin(el), c.z + dist * Math.cos(az) * Math.cos(el));
+    const orbit = new OrbitControls(camera, renderer.domElement);
+    orbit.target.copy(c); orbit.enableDamping = true; orbit.minDistance = rad * 0.3; orbit.maxDistance = rad * 8; orbit.update();
+
+    if (params.get("gui") !== "0") {
+      const gui = new GUI({ title: "relight" });
+      const hdriCtl = gui.add(state, "hdri", hdris).onChange((name) => { picker.select(name); setHdri(name); });
+      const picker = hdriPicker({ names: hdris, current: state.hdri, params, onPick: (name) => { state.hdri = name; hdriCtl.updateDisplay(); setHdri(name); } });
+      gui.add(state, "rotation", -180, 180, 1).name("dome rotation").onChange(applySky);
+      gui.add(state, "intensity", 0, 4, 0.05).name("dome intensity").onChange(applySky);
+      gui.close();
+    }
+
+    let frames = 0, last = performance.now();
+    renderer.setAnimationLoop(() => {
+      orbit.update();
+      renderer.setRenderTarget(target);
+      renderer.render(scene, camera);
+      const splats = spark.webgpu?.splats;
+      if (!host && splats) {
+        host = new plugins.PluginHost({ capabilities: splats.capabilities });
+        host.register(relight).register(display).attach(splats);
+        host.applyFx(chain);
+        const why = host.resolve(splats.meshes[0]).inactive.find((r) => r.id === relight.id);
+        if (why) status.textContent = `relight inactive: ${why.reason} ${why.detail ?? ""}`;
+      }
+      chain.applyToRenderTarget(renderer, target);
+      renderer.setRenderTarget(null);
+      output.render(renderer);
+      frames++;
+      const now = performance.now();
+      if (now - last > 500 && window.__splat.loaded) {
+        status.textContent = `${state.hdri} · relit ${relight.stats.relit} · ${(frames * 1000 / (now - last)).toFixed(0)} fps`;
+        frames = 0; last = now;
+      }
+    });
+  </script>
+</body>
+</html>
