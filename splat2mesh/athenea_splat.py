@@ -89,3 +89,29 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def write_web_splat(ply, out, y_down: bool = True, max_gaussians: int = 0) -> dict:
+    """The compact .splat web format (32 bytes a gaussian: position 3×f32, linear scale 3×f32, sRGB colour + opacity
+    4×u8, rotation w,x,y,z 4×u8), Y-down turned like the meshes so a splat and its USD line up. Sorted by size ×
+    opacity (largest first), the order web viewers expect; max_gaussians > 0 keeps only the largest ones."""
+    v = read_vertex(ply)
+    xyz = np.stack([v["x"], v["y"], v["z"]], 1).astype(np.float32)
+    q = np.stack([v[f"rot_{i}"] for i in range(4)], 1).astype(np.float32)
+    q /= np.linalg.norm(q, axis=1, keepdims=True)
+    if y_down:
+        xyz = xyz * np.array([1, -1, -1], np.float32)
+        w, x, y, z = q.T
+        q = np.stack([-x, w, -z, y], 1)
+    scl = np.exp(np.stack([v[f"scale_{i}"] for i in range(3)], 1)).astype(np.float32)
+    op = 1 / (1 + np.exp(-np.asarray(v["opacity"], np.float64)))
+    rgb = 0.5 + SH_C0 * np.stack([v[f"f_dc_{i}"] for i in range(3)], 1)
+    order = np.argsort(-(scl.prod(1) * op))
+    if max_gaussians:
+        order = order[:max_gaussians]
+    rec = np.zeros(len(order), dtype=[("p", "<f4", 3), ("s", "<f4", 3), ("c", "u1", 4), ("r", "u1", 4)])
+    rec["p"] = xyz[order]; rec["s"] = scl[order]
+    rec["c"] = np.clip(np.concatenate([rgb[order], op[order, None]], 1) * 255, 0, 255).round().astype(np.uint8)
+    rec["r"] = np.clip(q[order] * 128 + 128, 0, 255).round().astype(np.uint8)
+    Path(out).write_bytes(rec.tobytes())
+    return {"gaussians": int(len(order)), "bytes": Path(out).stat().st_size}

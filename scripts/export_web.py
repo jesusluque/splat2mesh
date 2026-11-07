@@ -2,7 +2,8 @@
 paths equal to the archive entry names) that the page shows with three.js' USDZLoader and that iOS opens in
 AR Quick Look; plus the source image.
 
-    python scripts/export_web.py OUTDIR NAME=ASSET_DIR[:TITLE[:SOURCE_IMAGE[:POSTER]]] [...] [--materials texture|parts]
+    python scripts/export_web.py OUTDIR NAME=ASSET_DIR[:TITLE[:SOURCE_IMAGE[:POSTER[:SPLAT.ply]]]] [...] [--materials texture|parts]
+SPLAT.ply (Idol, Y-down): written as models/NAME.splat; the viewer gets a Mesh | Splat switch.
 --materials texture (default): one mesh, materials per texel (transmission, roughness, metalness maps); parts: one
 mesh prim per part with its own material (faces take their centre texel's part: jagged borders on small features).
 ASSET_DIR holds asset.usda + its textures (+ report.json in it or its parent).
@@ -184,6 +185,7 @@ for spec in sys.argv[2:]:
     src = Path(parts[0]); title = parts[1] if len(parts) > 1 and parts[1] else name
     img = Path(parts[2]) if len(parts) > 2 and parts[2] else None
     poster = Path(parts[3]) if len(parts) > 3 and parts[3] else None
+    splat = Path(parts[4]) if len(parts) > 4 and parts[4] else None      # the Idol splat (.ply, Y-down) for the switch
     # materials per texture (default: one mesh, transmission/roughness/metalness maps per texel, borders follow the
     # texture) or per part (--materials parts: one mesh prim per part, a face takes its centre texel's part)
     use_parts = MATERIALS == "parts" and (src / "asset_parts.usda").exists() and (src / "parts.json").exists()
@@ -213,6 +215,11 @@ for spec in sys.argv[2:]:
     rep["poster"] = bool(poster and poster.exists())
     rep["parts"] = use_parts
     rep["maps"] = use_maps
+    if splat and splat.exists():
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from splat2mesh.athenea_splat import write_web_splat
+        print(name, "splat", write_web_splat(splat, out / "models" / f"{name}.splat"))
+        rep["splat"] = True
     cards.append((name, title, bool(img and img.exists()), rep))
     print(name, "pbr" if info["pbr"] else "colour")
 
@@ -227,17 +234,18 @@ for name, title, has_img, rep in cards:
         stats += f" · PSNR {rep['psnr']:.1f} dB"
     src_img = f'<img class="src" src="models/{name}_input.jpg" alt="input image">' if has_img else ""
     items.append(f'''<article>
-  <div class="view" data-usdz="models/{name}.usdz" data-parts="{'models/' + name + '_parts.json' if rep.get('parts') else ''}" data-maps="{'models/' + name + '_maps.json' if rep.get('maps') else ''}" tabindex="0" role="button" aria-label="Load the 3D model of {html.escape(title)}">
+  <div class="view" data-usdz="models/{name}.usdz" data-parts="{'models/' + name + '_parts.json' if rep.get('parts') else ''}" data-maps="{'models/' + name + '_maps.json' if rep.get('maps') else ''}" data-splat="{'models/' + name + '.splat' if rep.get('splat') else ''}" tabindex="0" role="button" aria-label="Load the 3D model of {html.escape(title)}">
     {f'<img class="poster" src="models/{name}_poster.jpg" alt="{html.escape(title)}" loading="lazy">' if rep.get("poster") else ""}
     <span class="hint">Click to load 3D</span></div>
   <div class="meta">{src_img}<div><h2>{html.escape(title)}</h2><p>{stats}</p>
-  <p class="dl"><a href="models/{name}.usdz" download>USDZ</a> · <a rel="ar" href="models/{name}.usdz">AR (iOS)</a></p></div></div>
+  <p class="dl"><a href="models/{name}.usdz" download>USDZ</a> · <a rel="ar" href="models/{name}.usdz">AR (iOS)</a>{f' · <a href="models/{name}.splat" download>Splat</a>' if rep.get('splat') else ''}</p></div></div>
 </article>''')
 
 (out / "index.html").write_text(f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>splat2mesh gallery</title>
 <script type="importmap">{{"imports": {{"three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+ "@mkkellogg/gaussian-splats-3d": "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js",
  "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"}}}}</script>
 <style>
 :root {{ --bg:#f6f5f2; --fg:#1d1d1f; --muted:#6b6b70; --card:#fff; --line:#e4e2dd; --accent:#b8322a; }}
@@ -253,6 +261,8 @@ article {{ background:var(--card); border:1px solid var(--line); border-radius:1
 .view .hint {{ position:absolute; left:50%; bottom:14px; transform:translateX(-50%); padding:6px 14px; border-radius:20px;
   background:var(--card); color:var(--fg); border:1px solid var(--line); font-size:13px }}
 .view.live .poster, .view.live .hint {{ display:none }}
+.view .mode {{ position:absolute; top:10px; right:10px; display:none; gap:4px; z-index:2 }} .view.live .mode {{ display:flex }}
+.view .mode button {{ font:inherit; font-size:12px; padding:3px 10px; border-radius:16px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer }} .view .mode button.on {{ background:var(--accent); color:#fff; border-color:var(--accent) }}
 .view .msg {{ position:absolute; inset:0; display:grid; place-items:center; color:var(--muted); font-size:13px }}
 .meta {{ display:flex; gap:12px; padding:12px 14px; align-items:flex-start }} .src {{ width:64px; height:64px; object-fit:cover; border-radius:8px; border:1px solid var(--line) }}
 h2 {{ font-size:16px; margin:0 0 2px }} .meta p {{ margin:0; color:var(--muted); font-size:13px }} .dl a {{ color:var(--accent) }}
@@ -294,6 +304,23 @@ function view(el) {{
   const ctl = new OrbitControls(cam, r.domElement); ctl.enableDamping = true; ctl.autoRotate = true; ctl.autoRotateSpeed = 1.2;
   const resize = () => {{ const w = el.clientWidth, h = el.clientHeight; r.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix(); }};
   new ResizeObserver(resize).observe(el); resize();
+  // Mesh | Splat switch: the Idol splat (.splat), loaded on demand into the same scene, lined up with the mesh
+  let meshG = null, splatV = null;
+  if (el.dataset.splat) {{
+    const bar = document.createElement("div"); bar.className = "mode";
+    bar.innerHTML = '<button class="on" data-m="mesh">Mesh</button><button data-m="splat">Splat</button>';
+    el.appendChild(bar);
+    bar.addEventListener("click", async (e) => {{ e.stopPropagation(); const m = e.target.dataset.m; if (!m) return;
+      bar.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.m === m));
+      if (m === "splat" && !splatV) {{
+        const note = document.createElement("div"); note.className = "msg"; note.textContent = "loading splat…"; el.appendChild(note);
+        try {{ const GS = await import("@mkkellogg/gaussian-splats-3d");
+          splatV = new GS.DropInViewer({{ sharedMemoryForWorkers: false, gpuAcceleratedSort: false }});
+          await splatV.addSplatScene(el.dataset.splat, {{ format: GS.SceneFormat.Splat, showLoadingUI: false, progressiveLoad: false }});
+          scene.add(splatV); }} catch (err) {{ console.error(err); }}
+        note.remove(); }}
+      if (meshG) meshG.visible = m === "mesh"; if (splatV) splatV.visible = m === "splat"; }});
+  }}
   const partsP = el.dataset.parts ? fetch(el.dataset.parts).then(r => r.json()).catch(() => ({{}})) : Promise.resolve({{}});
   loader.load(el.dataset.usdz, async (g) => {{
     const parts = await partsP;
@@ -342,7 +369,7 @@ function view(el) {{
         }});
       }}
     }}
-    msg.remove(); scene.add(g);
+    meshG = g; msg.remove(); scene.add(g);
     const box = new THREE.Box3().setFromObject(g), c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3()).length();
     ctl.target.copy(c); cam.position.copy(c).add(new THREE.Vector3(0.35, 0.18, 1).normalize().multiplyScalar(s * 1.6));
     cam.near = s / 100; cam.far = s * 20; cam.updateProjectionMatrix();
