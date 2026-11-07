@@ -151,6 +151,13 @@ The video for posting is put together from the same shots with `scripts/make_vid
 
 ## Quick start
 
+**Windows, everything local** (NVIDIA GPU with 8 GB or more): run the installer from the
+[releases](https://github.com/jesusluque/splat2mesh/releases); its wizard installs athenea, Idol, ENEAS and Iris-3B,
+and the splat2mesh app guides each object step by step, or a batch, with progress bars. See
+[docs/windows.md](docs/windows.md).
+
+**Mac / Linux, from source:**
+
 ```sh
 git clone https://github.com/jesusluque/splat2mesh.git && cd splat2mesh
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements.txt
@@ -186,6 +193,7 @@ also writes `compare.png`, splat beside mesh, and a re-render PSNR).
 | [Materials reference](docs/materials.md) | how parts are found, the per-texel rules, the material library, glass |
 | [Multi-view and seed selection](docs/multiview.md) | more than one view of the object; choosing the best Idol sample with a vision validator |
 | [Setup](docs/setup.md) | dependencies, GPU hosts, environment variables |
+| [Windows](docs/windows.md) | the installer, the app, GPU requirements, everything on one PC |
 | [Scripts](docs/scripts.md) | what every script does, grouped by purpose |
 | [Findings](docs/findings.md) | what was tried, measured, kept and dropped, with numbers |
 | [Licences](docs/licenses.md) | licences of the code, the dependencies and the models |
