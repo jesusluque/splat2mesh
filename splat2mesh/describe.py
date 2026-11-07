@@ -8,7 +8,7 @@ from __future__ import annotations
 from .materials import LIB
 
 
-def describe_ds(image, prompt, max_parts=12):
+def describe_ds(image, prompt, max_parts=20):
     import re
     from PIL import Image
     from splat2mesh.deepseek import ask as ds, img_url

@@ -35,7 +35,7 @@ def main():
     ap.add_argument("--camera", help="Idol's camera estimate for it (when SOURCE is a .ply)")
     ap.add_argument("--reuse-masks", action="store_true"); ap.add_argument("--turntable", type=int, default=0)
     ap.add_argument("--technique", default="rt", choices=["rt", "raster"])
-    ap.add_argument("--max-parts", type=int, default=12, help="parts DeepSeek may list")
+    ap.add_argument("--max-parts", type=int, default=20, help="parts DeepSeek may list")
     ap.add_argument("--no-coverage", action="store_true", help="skip DeepSeek's check for large parts the list missed")
     ap.add_argument("--no-overlap", action="store_true", help="keep ENEAS's masks as they are (no check, no overlap resolution)")
     ap.add_argument("--glass", default="path", choices=["path", "browser"],

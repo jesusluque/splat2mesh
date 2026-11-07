@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LIB = json.loads((ROOT / "splat2mesh/material_library.json").read_text())["materials"]
 NAMES = ", ".join(LIB)
 MID = "Qwen/Qwen3-VL-4B-Instruct"
-MAX_PARTS = 12
+MAX_PARTS = 20
 
 ap = argparse.ArgumentParser(); ap.add_argument("images", nargs="+"); ap.add_argument("--prompt", default="")
 ap.add_argument("--prompts-file", default=None); ap.add_argument("--out", default=None)

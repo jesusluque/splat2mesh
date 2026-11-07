@@ -90,7 +90,7 @@ function advancedSummary(o) {      // only what differs from the defaults
   if (i.dinov3_dtype !== "bf16") d.push("DINOv3 fp32");
   if (o.outputs.mesh && o.mesh.path !== "direct") d.push("render path");
   if (o.outputs.mesh && o.mesh.smooth) d.push(`smoothing ${o.mesh.smooth}`);
-  if (o.materials.max_parts !== 12) d.push(`${o.materials.max_parts} parts max`);
+  if (o.materials.max_parts !== 20) d.push(`${o.materials.max_parts} parts max`);
   if (!o.materials.coverage) d.push("no coverage check");
   if (!o.materials.overlap) d.push("masks unchecked");
   if (o.materials.deepseek_model) d.push(o.materials.deepseek_model);

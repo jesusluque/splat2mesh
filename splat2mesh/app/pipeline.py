@@ -10,7 +10,7 @@ JOB.json (every key optional except source and its input):
    "idol": {"seeds": 1, "gaussians": 262144, "mode": "auto" | "synthetic" | "real", "steps": 50, "cfg": 3.0,
             "rescale_t": 3.0, "dinov3_dtype": "bf16" | "fp32"},
    "outputs": {"splat": true, "mesh": false, "materials": true},
-   "materials": {"max_parts": 12, "coverage": true, "overlap": true, "deepseek_model": ""},
+   "materials": {"max_parts": 20, "coverage": true, "overlap": true, "deepseek_model": ""},
    "glass": {"mode": "path" | "browser", "cell": 1.0},
    "mesh": {"path": "direct" | "render", "faces": 80000, "tex": 4096, "smooth": 0.0, "max_folds": 300,
             "render_tex": 2048},
@@ -147,7 +147,7 @@ def splat_materials(job, ply, cam, inp, out: Path, log: Path, prog) -> Path:
     if job.get("prompt"):
         cmd += ["--prompt", job["prompt"]]
     m, g = job.get("materials", {}), job.get("glass", {})
-    cmd += ["--max-parts", m.get("max_parts", 12), "--glass", g.get("mode", "path"), "--glass-cell", g.get("cell", 1.0)]
+    cmd += ["--max-parts", m.get("max_parts", 20), "--glass", g.get("mode", "path"), "--glass-cell", g.get("cell", 1.0)]
     cmd += (["--no-coverage"] if m.get("coverage") is False else []) + (["--no-overlap"] if m.get("overlap") is False else [])
     env = dict(os.environ)
     if m.get("deepseek_model"):
