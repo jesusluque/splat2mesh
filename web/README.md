@@ -14,6 +14,6 @@ Making the files for a model:
 usd-athc NAME.usdc models/NAME.athc --prim /Splat/Opaque --transfer none --gzip --json NAME_athc.json  # sparkwebgpu tool
 ```
 
-`models/NAME.json` holds `boundsMin`, `boundsMax` (from the usd-athc JSON) and `frontAzimuthDeg` (180 − Idol's yaw, in
+`models/NAME.json` holds `boundsMin`, `boundsMax` (from the usd-athc JSON), an optional `description` for the page, `clouds` and `frontAzimuthDeg` (180 − Idol's yaw, in
 degrees: the side the picture showed). The gallery card is `export_web.py … NAME=page:splat.html?model=NAME|TITLE|…`.
 The full-resolution HDRIs come from the sparkwebgpu R2 bucket, whose CORS allows splat2mesh.lucab.co.uk.
