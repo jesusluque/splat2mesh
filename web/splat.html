@@ -99,7 +99,7 @@
       const m = new SplatMesh({ url: `./models/${c.file}`, extSplats: true, onProgress: download.track(`cloud${i}`) });
       scene.add(m); return m;
     });
-    const relight = atheneaRelightPlugin({ pixelDetail: false });
+    const relight = atheneaRelightPlugin({ pixelDetail: false, ...(params.has("glassCover") ? { glassCover: Number(params.get("glassCover")) } : {}) });
     clouds.forEach((c, i) => { if (c.ior) relight.setIor(meshes[i], c.ior); });
     const display = atheneaOutputPlugin({ view: params.get("view") ?? "agx", exposure: 0 });
     let host = null;
