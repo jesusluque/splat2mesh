@@ -31,10 +31,9 @@ Entry points:
 ## 1. Description: which parts, which material
 
 `flow_batch.py` asks **DeepSeek** (`deepseek-flash`, vision) for the part list, with the same rules as below and
-library material names. When DeepSeek is not reachable it falls back to the local describer, which then gets a
-DeepSeek-free path plus, when possible, a coverage check (DeepSeek adds up to 3 large missing parts). The local
-4B model listed a dwarf's helmet, axe and buckle but never its boots; DeepSeek listed twelve parts covering the
-figure.
+library material names. If that call fails it falls back to the local describer below, followed by a coverage
+check (DeepSeek, when it answers, adds up to 3 large missing parts). The local 4B model listed a dwarf's helmet,
+axe and buckle but never its boots; DeepSeek listed twelve parts covering the figure.
 
 The local fallback, `scripts/describe_materials.py`, runs **Qwen3-VL-4B** (the text encoder of Iris-3B, already on disk) on the picture
 and the prompt. It writes one line per material, using the library's names, with the parts made of it. It is asked
