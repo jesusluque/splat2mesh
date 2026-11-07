@@ -24,11 +24,11 @@ from scipy import ndimage as ndi
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(Path.home() / ".claude/skills/research-deepseek/scripts"))
-SHARED = Path.home() / "luc/athenea-gpu/shared.sh"
-IRIS_PY = ROOT / "third_party/iris-3b/.venv/bin/python"
-IXWIN, IX_PY = "ixwin-tb", r"C:\splat2mesh\venv\Scripts\python"
-IX_DIR = "C:/splat2mesh/mv"
+from splat2mesh.config import cfg, gpu_prefix, iris_python
+IRIS_PY = iris_python()
+# idol_mv.py runs on the Idol host; this path is written for a Windows host (config idol.os = "windows")
+IXWIN, IX_PY, IX_SDK = cfg("idol.host"), cfg("idol.python") or "python", cfg("idol.sdk")
+IX_DIR = cfg("idol.work").rstrip("/") + "/mv"
 # Idol yaw offsets of the object's sides: USD azimuth = 180 deg - Idol yaw, so the camera that walks to the viewer's
 # right (azimuth +90, the object's left side) is Idol yaw -90
 SIDES = {"left": -90.0, "back": -180.0, "right": -270.0}
@@ -40,12 +40,10 @@ PROMPT = ("Studio product photo of {desc}, the whole object centred, isolated on
 
 
 def ds(content):
-    import dsr
-    body = {"model": "deepseek-flash", "temperature": 0.1, "response_format": {"type": "json_object"},
+    from splat2mesh import deepseek as _deepseek
+    body = {"model": "", "temperature": 0.1, "response_format": {"type": "json_object"},
             "messages": [{"role": "user", "content": content}]}
-    req = urllib.request.Request(dsr.API, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json", "Authorization": "Bearer " + dsr.key()})
-    return json.loads(json.load(urllib.request.urlopen(req, timeout=300))["choices"][0]["message"]["content"])
+    return _deepseek.ask(body["messages"][0]["content"])
 
 
 def img_url(im):
@@ -125,7 +123,7 @@ def main():
     a = ap.parse_args()
     photo, work = Path(a.photo), Path(a.work); rd = work / "views_render"
     known = cameras(a.ply, a.camera, rd)
-    subprocess.run(["bash", str(SHARED), "bash", str(ROOT / "scripts/render_athenea.sh"), a.ply, str(rd),
+    subprocess.run(["bash", str(ROOT / "scripts/render_athenea.sh"), a.ply, str(rd),
                     "--rotate-x", "180", "--no-antialias"], check=True, capture_output=True, stdin=subprocess.DEVNULL)
     rep = {"known": known, "views": {}}
     # check: the render from Idol's own camera is the photo's view (same outline after cropping)
@@ -152,7 +150,7 @@ def main():
         w.save(src / f"{side}.png")
     desc = describe(photo); rep["desc"] = desc; print("desc:", desc, flush=True)
     gen = work / "views_iris"
-    subprocess.run(["bash", str(SHARED), str(IRIS_PY), str(ROOT / "scripts/iris_parts.py"), str(gen),
+    subprocess.run(gpu_prefix() + [str(IRIS_PY), str(ROOT / "scripts/iris_parts.py"), str(gen),
                     *[f"{s}=-={src / (s + '.png')}" for s in SIDES], "--start-sigma", *SIGMAS,
                     "--prompt", PROMPT, "--desc", desc], check=True, stdin=subprocess.DEVNULL)
     vd = work / "views"; vd.mkdir(exist_ok=True)
@@ -185,16 +183,16 @@ def main():
 
 
 def run_mv(front, views, known, work, gaussians, mode, weights=None, yaw_offsets=None):
-    """idol_mv.py on ixwin: front picture (free camera) + views (known cameras when given)."""
+    """idol_mv.py on the Idol host: front picture (free camera) + views (known cameras when given)."""
     job = f"{IX_DIR}/{work.name}"
     subprocess.run(["ssh", IXWIN, f'mkdir "{job}" 2>nul & exit 0'], check=True)
-    subprocess.run(["scp", "-q", str(ROOT / "scripts/idol_mv.py"), f"{IXWIN}:C:/splat2mesh/idol-sdk/idol_mv.py"], check=True)
+    subprocess.run(["scp", "-q", str(ROOT / "scripts/idol_mv.py"), f"{IXWIN}:{IX_SDK.replace(chr(92), '/')}/idol_mv.py"], check=True)
     subprocess.run(["scp", "-q", str(front), *map(str, views), f"{IXWIN}:{job}/"], check=True)
     cam = work / "mv_known.json"; cam.write_text(json.dumps(known))
     subprocess.run(["scp", "-q", str(cam), f"{IXWIN}:{job}/mv_known.json"], check=True)
     w = weights or [1.0] + [VIEW_W if known else 1.0] * len(views)
     imgs = " ".join(f"{job}/{Path(p).name}" for p in [front, *views])
-    r = subprocess.run(["ssh", IXWIN, rf"cd /d C:\splat2mesh\idol-sdk && set ATTN_BACKEND=sdpa&& {IX_PY} idol_mv.py --images {imgs} "
+    r = subprocess.run(["ssh", IXWIN, rf"cd /d {IX_SDK} && set ATTN_BACKEND=sdpa&& {IX_PY} idol_mv.py --images {imgs} "
                         rf"--weights {' '.join(map(str, w))} --cameras {job}/mv_known.json --out {job}/out --mode {mode} "
                         rf"--num_gaussians {gaussians}" + (f" --yaw-offsets {' '.join(map(str, yaw_offsets))}" if yaw_offsets else "")],
                        capture_output=True, text=True)

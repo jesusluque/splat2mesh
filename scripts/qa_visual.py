@@ -142,10 +142,9 @@ DS_PROMPT = (
 
 def judge(out: Path):
     """deepseek-flash (vision) inspects each sheet: score 1–5 and the defects, part by part. Calibrated on known
-    breakages (torn web car 2, glass watch 1, rippled box 2); the key comes from the research-deepseek skill's env."""
+    breakages (torn web car 2, glass watch 1, rippled box 2); DeepSeek settings in splat2mesh.config."""
     import base64, io, urllib.request
-    sys.path.insert(0, str(Path.home() / ".claude/skills/research-deepseek/scripts"))
-    import dsr
+    from splat2mesh import deepseek as _deepseek
     res_f = out / "qa.json"
     res = json.loads(res_f.read_text()) if res_f.exists() else {}
     for sheet in sorted(out.glob("*.jpg")):
@@ -154,13 +153,11 @@ def judge(out: Path):
             continue
         b = io.BytesIO(); Image.open(sheet).convert("RGB").save(b, "JPEG", quality=88)
         url = "data:image/jpeg;base64," + base64.b64encode(b.getvalue()).decode()
-        body = {"model": "deepseek-flash", "temperature": 0.1, "response_format": {"type": "json_object"},
+        body = {"model": "", "temperature": 0.1, "response_format": {"type": "json_object"},
                 "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}},
                                                           {"type": "text", "text": DS_PROMPT}]}]}
-        req = urllib.request.Request(dsr.API, data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json", "Authorization": "Bearer " + dsr.key()})
         try:
-            j = json.loads(json.load(urllib.request.urlopen(req, timeout=300))["choices"][0]["message"]["content"])
+            j = _deepseek.ask(body["messages"][0]["content"])
         except Exception as e:
             print(name, "failed", e, flush=True); continue
         res[name] = {"score": j.get("score"), "defects": j.get("defects", []), "mtime": sheet.stat().st_mtime}

@@ -10,8 +10,6 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]; sys.path.insert(0, str(ROOT))
 from splat2mesh.materials import prepare, parse_description, render_orbit, from_view_masks, apply_texel_classes, export_parts
 
-HOST = os.environ.get("SPLAT2MESH_ENEAS_HOST", "ixwin-tb")
-LINUX = os.environ.get("SPLAT2MESH_ENEAS_LINUX", "1" if HOST != "ixwin-tb" else "0") == "1"   # plain Linux vs Windows+WSL
 asset, image, desc = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 spec = asset / "mat" / "regions.json"
 if not spec.exists():
@@ -60,10 +58,8 @@ for c in sorted({c for c, _ in items if _libm(c).get("transmission", 0) > 0}):
     if f"the {c}" not in [t for _, t in items]:
         items.append((c, f"the {c}")); auto_items.append((c, f"the {c}"))
 tag = asset.resolve().as_posix().replace("/", "_")[-60:]
-if LINUX:
-    win = f"splat2mesh_eneas/jobs/{tag}"; wsl = f"$HOME/{win}"
-else:
-    win = f"C:/splat2mesh/eneas_jobs/{tag}"; wsl = "/mnt/c/" + win[3:]
+from splat2mesh.remote import Eneas
+job = Eneas(tag)                                    # host and paths from splat2mesh.config [eneas]
 reuse = "--reuse-masks" in sys.argv and (asset / "mat" / MASKS).exists()
 run_items = items
 if reuse:                     # only the phrases the saved masks do not have yet
@@ -89,23 +85,17 @@ def _gpu_lock(path=Path.home() / ".cache/splat2mesh_eneas.lock"):
         path.rmdir()
 if not reuse or run_items:
  with _gpu_lock():
-   if LINUX:
-     subprocess.run(["ssh", HOST, f"rm -rf ~/{win}; mkdir -p ~/{win}/frames"], check=False)
-   else:
-     subprocess.run(["ssh", HOST, f'rmdir /s /q "{win}" 2>nul & mkdir "{win}\\frames"'], check=False)
-   subprocess.run(["scp", "-q", *map(str, frames), f"{HOST}:{win}/frames/"], check=True)
-   subprocess.run(["scp", "-q", str(ROOT / "scripts/eneas_seq.py"), f"{HOST}:{win}/"], check=True)
-   q = " ".join("'" + t.replace("'", "") + "'" for _, t in run_items)
-   inner = f"~/.local/bin/uv run python {wsl}/eneas_seq.py {wsl}/frames {wsl}/masks.npz {ann},{ann2} {q}"
-   cmd = (f"cd ~/splat2mesh_eneas/eneas && {inner}" if LINUX
-          else f'wsl -d Ubuntu-24.04 -- bash -lc "cd ~/splat2mesh/eneas && {inner}"')
-   print(subprocess.run(["ssh", HOST, cmd], capture_output=True, text=True, timeout=5400).stdout.replace("\x00", "")[-1500:])
+   job.reset()
+   job.upload(frames, "frames")
+   job.upload([ROOT / "scripts/eneas_seq.py"])
+   print(job.run("eneas_seq.py", ["frames", "masks.npz"], [f"{ann},{ann2}"] + [t.replace("'", "") for _, t in run_items])
+         .replace("\x00", "")[-1500:])
    if reuse:                 # merge the new phrases into the saved masks
-       subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(asset / "mat" / "masks_new.npz")], check=True)
+       job.download("masks.npz", asset / "mat" / "masks_new.npz")
        merged = {**dict(np.load(asset / "mat" / MASKS)), **dict(np.load(asset / "mat" / "masks_new.npz"))}
        np.savez_compressed(asset / "mat" / MASKS, **merged); (asset / "mat" / "masks_new.npz").unlink()
    else:
-       subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(asset / "mat" / MASKS)], check=True)
+       job.download("masks.npz", asset / "mat" / MASKS)
 z = np.load(asset / "mat" / MASKS)
 def _fit(m, n):            # ENEAS may return fewer frames than sent: pad with empty views
     if m.shape[0] >= n:
@@ -118,8 +108,7 @@ if "--no-overlap" not in sys.argv and len(masks) > 1:
     try:
         from splat2mesh.overlap import resolve, verify
         sys.path.insert(0, str(ROOT / "scripts"))
-        from gen_views import ds as _ds, img_url as _img_url
-        _ask = lambda sheet, q: _ds([{"type": "image_url", "image_url": {"url": _img_url(sheet)}}, {"type": "text", "text": q}])
+        from splat2mesh.deepseek import ask_image as _ask
         # the material-name phrases ("the crystal") are only for panes the description missed: they take part
         # after the listed parts are settled (rule below), not in the vote, where they grab look-alike colours
         _auto = {f"{c}|{t}" for c, t in auto_items}

@@ -1,0 +1,38 @@
+# splat2mesh configuration. Copy to ./splat2mesh.toml (git-ignored) or ~/.config/splat2mesh/config.toml and edit.
+# Every key can also be set by an environment variable (see splat2mesh/config.py, ENV). Empty = default.
+# Check what is resolved with:  .venv/bin/python -m splat2mesh.config
+
+[athenea]
+bin = ""            # athenea executable; default: third_party/athenea/build/*/bin/athenea, then $PATH
+shaders = ""        # ATHENEA_SHADER_DIR; default: <build>/shaders
+
+[gpu]
+lock = ""           # optional script that serialises GPU jobs: runs as  bash LOCK COMMAND...
+
+[idol]              # picture → splat
+host = "local"      # "local" or an ssh host with CUDA
+os = "linux"        # remote host: "linux" or "windows"
+sdk = "~/idol-sdk"  # Idol SDK checkout on that host
+python = ""         # its Python; default <sdk>/.venv/bin/python
+work = "~/splat2mesh_idol"
+
+[eneas]             # text → part masks
+host = "local"
+os = "linux"        # "linux", or "wsl" for a Windows host running ENEAS inside WSL
+dir = "~/eneas"
+work = "~/splat2mesh_eneas/jobs"
+distro = "Ubuntu-24.04"
+
+[iris]              # Iris-3B (text → picture, restorer); optional
+dir = "third_party/iris-3b"
+python = ""
+
+[deepseek]          # vision checks and part descriptions; key from $DEEPSEEK_API_KEY or this file
+model = "deepseek-flash"
+env_file = ""       # a file with a line DEEPSEEK_API_KEY=...
+
+[render]
+hdri = ""           # studio HDRI for stills and turntables; default assets/hdri/brown_photostudio_02.hdr (CC0)
+
+[notify]
+command = ""        # optional: COMMAND [-f IMAGE] TEXT at the end of a batch

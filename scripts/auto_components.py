@@ -10,8 +10,8 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(Path.home() / ".claude/skills/research-deepseek/scripts"))
-import dsr
+sys.path.insert(0, str(ROOT))
+from splat2mesh import deepseek as _deepseek
 
 MAX_PARTS = 8
 PROMPT = ("This photo shows one object. Write its bill of materials (BOM) for a 3D artist who models each kind of "
@@ -31,13 +31,11 @@ def list_parts(ref: Path):
     mats = list(json.loads((ROOT / "splat2mesh/material_library.json").read_text())["materials"])
     b = io.BytesIO(); Image.open(ref).convert("RGB").save(b, "JPEG", quality=90)
     url = "data:image/jpeg;base64," + base64.b64encode(b.getvalue()).decode()
-    body = {"model": "deepseek-flash", "temperature": 0.1, "response_format": {"type": "json_object"},
+    body = {"model": "", "temperature": 0.1, "response_format": {"type": "json_object"},
             "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}},
                                                       {"type": "text", "text": PROMPT.format(n=MAX_PARTS, mats=", ".join(mats))}]}]}
     import urllib.request
-    req = urllib.request.Request(dsr.API, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json", "Authorization": "Bearer " + dsr.key()})
-    j = json.loads(json.load(urllib.request.urlopen(req, timeout=300))["choices"][0]["message"]["content"])
+    j = _deepseek.ask(body["messages"][0]["content"])
     parts, seen = [], set()
     for p in (j.get("bom") or j.get("parts") or [])[:MAX_PARTS]:
         ph, m = str(p.get("phrase", "")).strip().lower(), str(p.get("material", "")).strip().lower()

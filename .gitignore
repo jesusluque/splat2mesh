@@ -6,3 +6,6 @@ __pycache__/
 *.pyc
 .DS_Store
 third_party/
+splat2mesh.toml
+.venv
+third_party

@@ -40,7 +40,7 @@ def describe_ds(image, prompt, max_parts=12):
     import re
     from PIL import Image
     sys.path.insert(0, str(ROOT / "scripts"))
-    from gen_views import ds, img_url
+    from splat2mesh.deepseek import ask as ds, img_url
     q = ("You prepare inputs for a segmentation model that finds one object part per short phrase. List the visible "
          "PARTS of this object grouped by MATERIAL. Rules: use only these material names: " + ", ".join(LIB) +
          f". Each part is a short noun phrase starting with 'the' that a segmenter can find (one part per phrase, "
@@ -80,7 +80,8 @@ for d in list(need):
 if need:
     imgs = [str(d / "idol_input.png") for d in need]
     pf = out / "_prompts.txt"; pf.write_text("\n".join(prompts[int(d.name)] for d in need))
-    subprocess.run(["bash", str(Path.home() / "luc/athenea-gpu/shared.sh"), str(ROOT / "third_party/iris-3b/.venv/bin/python"),
+    from splat2mesh.config import gpu_prefix, iris_python
+    subprocess.run(gpu_prefix() + [iris_python(),
                     str(ROOT / "scripts/describe_materials.py"), *imgs, "--prompts-file", str(pf)], check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for d in need:
@@ -93,7 +94,7 @@ def complete_parts(desc, image, max_new=3):
     from PIL import Image
     try:
         sys.path.insert(0, str(ROOT / "scripts"))
-        from gen_views import ds, img_url
+        from splat2mesh.deepseek import ask as ds, img_url
         have = [t.strip() for c in desc.split(";") if ":" in c for t in c.split(":", 1)[1].split(",")]
         q = ("This is a picture of an object and the list of its parts used to assign materials: " + "; ".join(have) +
              f". Name up to {max_new} LARGE visible parts that are missing from the list (each a short noun phrase "
