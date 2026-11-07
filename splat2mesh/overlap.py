@@ -82,6 +82,18 @@ def verify(masks, frames, ann_index, photo, parts, ask):
     ans = {keys[int(j)]: v for j, v in _ask_majority(ask, sheet, q, "tiles").items()
            if j.isdigit() and int(j) < len(keys)}
     out = {k: (np.zeros_like(v) if ans.get(k) == "no" else v) for k, v in masks.items()}
+    # a sub-part phrase ("the helmet horns") whose mask is the same as its whole's ("the steel helmet"): ENEAS could
+    # not isolate the sub-part, so the mask belongs to the whole (the sub-part's class stays listed)
+    head = lambda k: parts[k].lower().split()[-1]
+    for b in keys:
+        wb = parts[b].lower().split()
+        for a in keys:
+            if a == b or head(a) == head(b) or head(a) not in wb[:-1] or not out[a].any() or not out[b].any():
+                continue
+            iou = (out[a] & out[b]).sum() / max((out[a] | out[b]).sum(), 1)
+            if iou > DUPLICATE:
+                print(f"mask of {parts[b]!r} is the whole {parts[a]!r} (IoU {iou:.2f}): emptied", flush=True)
+                out[b] = np.zeros_like(out[b]); ans[b] = "whole"
     return out, ans, sheet
 
 
