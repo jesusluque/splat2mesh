@@ -63,8 +63,8 @@ def idol(image: Path, work: Path, gaussians: int, seeds: int = 1) -> Path:
         d = work / "seeds" / f"s{s}"
         ply = idol_sample(image, d, gaussians, seed=s)
         try:
-            sh(["bash", str(ROOT / "scripts/seed_views.sh"), str(ply), str(d / "idol_camera.json"), str(image), str(d / "check")])
-            scores[s] = json.loads((d / "check.check.json").read_text())["score"]
+            from splat2mesh.seeds import score as seed_score       # 4 sides with athenea + the DeepSeek validator
+            scores[s] = seed_score(ply, d / "idol_camera.json", image, d / "check")["score"]
         except Exception as e:                   # no DeepSeek / no renderer: keep the seed unscored
             print(f"    seed {s}: not scored ({str(e)[-200:]})", flush=True); scores[s] = None
         print(f"    seed {s}: score {scores[s]}", flush=True)

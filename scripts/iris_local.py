@@ -1,7 +1,9 @@
 """Iris-3B Turbo (speridlabs, Apache-2.0) locally, sized for a 24 GB Apple Silicon Mac:
 DiT weights in bf16 instead of upstream's fp32 (6 GB instead of 12 GB) + Qwen3-VL-4B text encoder (8 GB).
 
-    python scripts/iris_local.py "prompt" out.png [--seed 7] [--size 1024x1024] [--device mps]
+    python scripts/iris_local.py "prompt" out.png [--seed 7] [--size 1024x1024] [--device mps] [--te-device cpu]
+--te-device cpu: the text encoder (Qwen3-VL-4B, 8 GB in bf16) on the CPU and only the DiT (6 GB) on the GPU, so it
+runs on an 8 GB card; a prompt takes longer to encode, the image is the same.
 Run with the Iris venv (third_party/iris-3b/.venv) and, on the Mac, under the GPU lock (shared.sh).
 """
 import argparse, sys, time
@@ -21,6 +23,7 @@ ap = argparse.ArgumentParser(); ap.add_argument("prompt", help="prompt, or @file
 ap.add_argument("--seed", type=int, default=7); ap.add_argument("--size", default="1024x1024")
 ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cuda")
 ap.add_argument("--checkpoint", default=str(IRIS / "weights/turbo"))
+ap.add_argument("--te-device", default=None, help="text encoder device (default: the same as --device)")
 a = ap.parse_args()
 W, H = map(int, a.size.lower().split("x"))
 dev = torch.device(a.device)
@@ -34,7 +37,7 @@ model.load_state_dict(weights, strict=True, assign=True)
 model = model.eval().to(device=dev, dtype=torch.bfloat16)
 del weights
 import iris3b.text  # noqa: F401
-te = TEXT_ENCODERS.build(cfg.text_encoder.name, cfg.text_encoder, device=dev)
+te = TEXT_ENCODERS.build(cfg.text_encoder.name, cfg.text_encoder, device=torch.device(a.te_device) if a.te_device else dev)
 t1 = time.time()
 from torchvision.utils import save_image
 if a.prompt.startswith("@"):

@@ -41,8 +41,30 @@ def _bin() -> str:
     return str(b)
 
 
-def run_script(lines: list[str], lock: bool = True, log: Path | None = None) -> None:
-    """Run shell lines as ONE job (one GPU lock for all of them)."""
+def run_script(cmds: list, lock: bool = True, log: Path | None = None) -> None:
+    """Run commands as ONE job (one GPU lock for all of them). Each command is an argument list, or
+    (cmd, "tolerate") to go on when it fails; plain shell strings are still accepted on Mac/Linux.
+    On Windows the commands run one after another under splat2mesh's own GPU lock (no bash)."""
+    if os.name == "nt":
+        from .config import gpu_lock
+        with gpu_lock(), (open(log, "w") if log else open(os.devnull, "w")) as lf:
+            for c in cmds:
+                tol = isinstance(c, tuple)
+                argv = c[0] if tol else c
+                r = subprocess.run(argv, env=athenea_env(), stdin=subprocess.DEVNULL, stdout=lf, stderr=subprocess.STDOUT)
+                if r.returncode and not tol:
+                    raise subprocess.CalledProcessError(r.returncode, argv)
+                if r.returncode:
+                    lf.write(f"failed ({r.returncode}): {argv[-1]}\n")
+        return
+    lines = []
+    for c in cmds:
+        if isinstance(c, str):
+            lines.append(c)
+        elif isinstance(c, tuple):
+            lines.append(" ".join(_q(x) for x in c[0]) + " > /dev/null 2>&1 || echo 'failed: " + str(c[0][-1]) + "'")
+        else:
+            lines.append(" ".join(_q(x) for x in c))
     with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
         f.write("set -e\n" + "\n".join(lines) + "\n")
     cmd = (gpu_prefix() if lock else []) + ["bash", f.name]
@@ -105,7 +127,7 @@ def render_splats(ply, views, out_dir, size: int = 1024, rotate_x180: bool = Fal
     for name, eye, tgt, up in views:
         args = ["render", "--splats", str(ply), "--eye", *map(str, eye), "--target", *map(str, tgt), "--up",
                 *map(str, up), "--focal", str(FOCAL), "--size", f"{size}x{size}", *rot, *extra, "-o", str(d / f"{name}.exr")]
-        lines.append(" ".join(_q(x) for x in [b, *args]) + " > /dev/null 2>&1 || echo 'view failed: " + name + "'")
+        lines.append(([str(b), *args], "tolerate"))
     run_script(lines, log=log)
     out = []
     for name, *_ in views:
@@ -201,7 +223,7 @@ def stage(scene, out_dir, *, turntable: int = 0, cameras=None, eye=None, target=
     else:
         args += ["--eye", *map(str, eye), "--target", *map(str, target), "--up", *map(str, up), "-o", str(d / "view.exr")]
         names = ["view"]
-    run_script([" ".join(_q(x) for x in args)], log=log)
+    run_script([[str(x) for x in args]], log=log)
     return [d / f"{n}.exr" for n in names]
 
 

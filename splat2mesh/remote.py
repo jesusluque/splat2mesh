@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .config import cfg
+from .config import WINDOWS, cfg, venv_python
 
 
 def _run(cmd, **kw) -> str:
@@ -37,12 +37,19 @@ def idol_sample(image, work, gaussians: int = 262144, seed: int = 42) -> Path:
     image, work = Path(image), Path(work); work.mkdir(parents=True, exist_ok=True)
     host, osname, sdk = cfg("idol.host"), cfg("idol.os"), cfg("idol.sdk")
     args = f"--mode {idol_mode(image)} --num_gaussians {gaussians} --seed {seed}"
+    if cfg("idol.weights"):
+        args += f" --weights {cfg('idol.weights')}"
     stem = image.stem
     if host == "local":
-        py = cfg("idol.python") or str(Path(_x(sdk)) / ".venv/bin/python")
+        py = cfg("idol.python") or venv_python(Path(_x(sdk)) / ".venv")
         out = work / "idol"; out.mkdir(exist_ok=True)
-        _run([py, "-m", "idol.sample", "--image", str(image), "--out", str(out)] + args.split(),
-             cwd=_x(sdk), env={**os.environ, "ATTN_BACKEND": "sdpa"})
+        argv = ["--mode", idol_mode(image), "--num_gaussians", str(gaussians), "--seed", str(seed)]
+        argv += ["--weights", _x(cfg("idol.weights"))] if cfg("idol.weights") else []
+        _run([py, "-m", "idol.sample", "--image", str(image), "--out", str(out)] + argv
+             + (["--no_optimize"] if WINDOWS else []),          # no torch.compile on Windows
+             cwd=_x(sdk), env={**os.environ, "ATTN_BACKEND": "sdpa",
+                               # installed with its weights in the cache: no Hugging Face login at run time
+                               **({"HF_HUB_OFFLINE": "1"} if cfg("idol.weights") else {})})
         get = lambda name, dst: shutil.copy(out / name, dst) if (out / name).exists() else None
     elif osname == "windows":
         d = cfg("idol.work"); py = cfg("idol.python") or "python"
@@ -73,11 +80,21 @@ class Eneas:
     def __init__(self, tag: str):
         self.host, self.os, self.dir = cfg("eneas.host"), cfg("eneas.os"), cfg("eneas.dir")
         work = cfg("eneas.work")
-        if self.os == "wsl":                       # Windows path for scp, the same folder seen from WSL
-            self.job = f"{work}/{tag}"
+        if self.os == "windows" and self.host == "local":
+            self.job = _x(f"{work}/{tag}"); self.inside = self.job
+        elif self.os == "wsl":                     # Windows path for scp, the same folder seen from WSL
+            self.job = (_x(f"{work}/{tag}") if self.host == "local" else f"{work}/{tag}").replace("\\", "/")
             self.inside = "/mnt/" + self.job[0].lower() + self.job[2:] if self.job[1] == ":" else self.job
         else:
             self.job = f"{work}/{tag}"; self.inside = self.job
+
+    @property
+    def _native(self) -> bool:               # ENEAS on this Windows PC, natively: its own Python, files on disk
+        return self.host == "local" and self.os == "windows"
+
+    @property
+    def _local_wsl(self) -> bool:            # ENEAS in WSL on this Windows PC: files on disk, wsl.exe directly
+        return self.host == "local" and self.os == "wsl"
 
     def _ssh(self, cmd: str, **kw) -> str:
         if self.host == "local":
@@ -85,7 +102,9 @@ class Eneas:
         return _run(["ssh", self.host, cmd], **kw)
 
     def reset(self):
-        if self.os == "wsl":
+        if self._local_wsl or self._native:
+            j = Path(_x(self.job)); shutil.rmtree(j, ignore_errors=True); (j / "frames").mkdir(parents=True)
+        elif self.os == "wsl":
             w = self.job.replace("/", "\\")
             self._ssh(f'rmdir /s /q "{w}" 2>nul & mkdir "{w}\\frames"')
         else:
@@ -110,6 +129,13 @@ class Eneas:
         the job folder (not quoted, so ~ expands); words: quoted arguments (phrases)."""
         q = " ".join([f"{self.inside}/{f}" for f in files] + [shlex.quote(w) for w in words])
         inner = f"cd {self.dir} && ~/.local/bin/uv run python {self.inside}/{script_name} {q}"
+        if self._native:
+            py = cfg("eneas.python") or venv_python(Path(_x(self.dir)) / ".venv")
+            j = Path(_x(self.job))
+            return _run([py, str(j / script_name), *[str(j / f) for f in files], *words], timeout=timeout,
+                        cwd=_x(self.dir))
+        if self._local_wsl:
+            return _run(["wsl", "-d", cfg("eneas.distro"), "--", "bash", "-lc", inner], timeout=timeout)
         if self.os == "wsl":
             inner = inner.replace('"', '\\"')
             return self._ssh(f'wsl -d {cfg("eneas.distro")} -- bash -lc "{inner}"', timeout=timeout)

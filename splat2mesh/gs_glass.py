@@ -91,7 +91,7 @@ def mesh2splat(stage, out_usdc, max_splats: int = 0, log=None) -> Path:
     """athenea mesh2splat --transfer (surfels with normals, cover and the light transfer)."""
     args = [_bin(), "mesh2splat", str(Path(stage).resolve()), "--prim", "/World/Glass", "--transfer",
             "-o", str(Path(out_usdc).resolve())] + (["--max-splats", str(max_splats)] if max_splats else [])
-    run_script([" ".join(_q(a) for a in args)], log=log)
+    run_script([[str(a) for a in args]], log=log)
     return Path(out_usdc)
 
 

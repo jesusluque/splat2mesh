@@ -20,6 +20,14 @@ from functools import lru_cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+WINDOWS = os.name == "nt"
+TOOLS = ROOT / "tools"          # where the Windows installer puts athenea, uv and the model checkouts
+
+
+def venv_python(venv) -> str:
+    """The Python of a virtual environment, on Windows (Scripts/python.exe) and elsewhere (bin/python)."""
+    v = Path(os.path.expanduser(str(venv)))
+    return str(v / ("Scripts/python.exe" if WINDOWS else "bin/python"))
 
 DEFAULTS = {
     "athenea": {
@@ -33,15 +41,18 @@ DEFAULTS = {
         "sdk": "~/idol-sdk",     # Idol SDK checkout on that host
         "python": "",            # its Python; empty: <sdk>/.venv/bin/python (linux) or python (windows)
         "work": "~/splat2mesh_idol",   # scratch folder on that host
+        "weights": "",           # Idol's weights: a Hugging Face repo or a local folder; empty: speridlabs/idol
     },
     "eneas": {
         "host": "local",
-        "os": "linux",           # "linux", or "wsl" (Windows host running ENEAS inside WSL)
+        "os": "linux",           # "linux", "windows" (native, this PC) or "wsl" (a Windows host, ENEAS in WSL)
+        "python": "",            # ENEAS's Python for "windows"; empty: <dir>/.venv
         "dir": "~/eneas",        # ENEAS checkout (inside WSL for "wsl")
         "work": "~/splat2mesh_eneas/jobs",
         "distro": "Ubuntu-24.04",
     },
-    "iris": {"dir": str(ROOT / "third_party/iris-3b"), "python": ""},
+    "iris": {"dir": str(ROOT / "third_party/iris-3b"), "python": "",
+             "mode": "gpu"},           # gpu | cpu-encoder (8 GB GPUs) | space (the online Space)
     "deepseek": {
         "url": "https://api.deepseek.com/chat/completions",
         "model": "deepseek-flash",
@@ -76,7 +87,10 @@ def _merge(a, b):
 def load() -> dict:
     import copy
     c = copy.deepcopy(DEFAULTS)
-    for f in (Path.home() / ".config/splat2mesh/config.toml", ROOT / "splat2mesh.toml"):
+    user = [Path.home() / ".config/splat2mesh/config.toml"]
+    if os.environ.get("APPDATA"):                       # Windows: what the installer and the app write
+        user.append(Path(os.environ["APPDATA"]) / "splat2mesh" / "config.toml")
+    for f in (*user, ROOT / "splat2mesh.toml"):
         if f.exists():
             _merge(c, tomllib.loads(f.read_text()))
     for var, key in ENV.items():
@@ -98,7 +112,8 @@ def athenea_bin() -> Path | None:
     """The athenea executable: configured, else the third_party/athenea build, else $PATH."""
     b = cfg("athenea.bin")
     cands = [Path(os.path.expanduser(b))] if b else []
-    cands += sorted((ROOT / "third_party/athenea/build").glob("*/bin/athenea"))
+    cands += sorted((ROOT / "third_party/athenea/build").glob("*/bin/athenea" + (".exe" if WINDOWS else "")))
+    cands += sorted(TOOLS.glob("athenea*/**/athenea.exe")) if WINDOWS else []
     w = shutil.which("athenea")
     if w:
         cands.append(Path(w))
@@ -110,8 +125,10 @@ def athenea_env() -> dict:
     env = dict(os.environ)
     sh = cfg("athenea.shaders")
     b = athenea_bin()
-    if not sh and b is not None and (b.parent.parent / "shaders").exists():
-        sh = str(b.parent.parent / "shaders")
+    if not sh and b is not None:
+        for d in (b.parent.parent / "shaders", b.parent / "shaders"):     # a build tree, or a release folder
+            if d.exists():
+                sh = str(d); break
     if sh:
         env["ATHENEA_SHADER_DIR"] = os.path.expanduser(sh)
     return env
@@ -125,7 +142,61 @@ def gpu_prefix() -> list[str]:
 
 def iris_python() -> str:
     p = cfg("iris.python")
-    return os.path.expanduser(p) if p else str(Path(cfg("iris.dir")).expanduser() / ".venv/bin/python")
+    return os.path.expanduser(p) if p else venv_python(Path(cfg("iris.dir")).expanduser() / ".venv")
+
+
+class gpu_lock:
+    """One GPU job at a time on this machine, between processes (a lock file in the user's cache). Used where no
+    lock script is configured (Windows); re-entrant within a process."""
+    _depth = 0
+
+    def __init__(self, timeout: float = 6 * 3600):
+        self.timeout = timeout
+        self.path = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".cache") / "splat2mesh" / "gpu.lock"
+
+    def __enter__(self):
+        import time
+        if gpu_lock._depth == 0:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            t0 = time.time()
+            while True:
+                try:
+                    fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    os.write(fd, str(os.getpid()).encode()); os.close(fd); break
+                except FileExistsError:
+                    try:            # a lock left by a process that is gone, or older than the timeout
+                        pid = int(self.path.read_text() or 0)
+                        stale = time.time() - self.path.stat().st_mtime > self.timeout or not _alive(pid)
+                    except (OSError, ValueError):
+                        stale = False
+                    if stale:
+                        self.path.unlink(missing_ok=True)
+                    elif time.time() - t0 > self.timeout:
+                        raise TimeoutError("GPU lock " + str(self.path))
+                    else:
+                        time.sleep(2)
+        gpu_lock._depth += 1
+        return self
+
+    def __exit__(self, *a):
+        gpu_lock._depth -= 1
+        if gpu_lock._depth == 0:
+            self.path.unlink(missing_ok=True)
+
+
+def _alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if WINDOWS:
+        import ctypes
+        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)     # PROCESS_QUERY_LIMITED_INFORMATION
+        if h:
+            ctypes.windll.kernel32.CloseHandle(h); return True
+        return False
+    try:
+        os.kill(pid, 0); return True
+    except OSError:
+        return False
 
 
 def deepseek_key() -> str | None:

@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>splat2mesh</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">splat2mesh</div>
+  <nav>
+    <button data-page="create" class="on">Create</button>
+    <button data-page="jobs">Jobs <span id="jobcount" class="pill"></span></button>
+    <button data-page="components">Components</button>
+    <button data-page="settings">Settings</button>
+  </nav>
+  <div id="gpu" class="gpu"></div>
+</header>
+
+<main>
+<!-- ============================================================ CREATE: the wizard -->
+<section id="create" class="page on">
+  <ol class="steps" id="steps"></ol>
+
+  <div class="step" data-step="start">
+    <h2>What do you start from?</h2>
+    <div class="cards">
+      <label class="card"><input type="radio" name="source" value="prompt" checked>
+        <b>A sentence</b><span>Iris-3B draws the picture, then everything else.</span></label>
+      <label class="card"><input type="radio" name="source" value="image">
+        <b>A picture</b><span>A render, a generated image or a photo of one object.</span></label>
+      <label class="card"><input type="radio" name="source" value="splat">
+        <b>An Idol splat</b><span>A .ply from Idol with its camera and input picture.</span></label>
+      <label class="card"><input type="radio" name="source" value="batch">
+        <b>Many (batch)</b><span>A list of sentences or a set of pictures, same options for all.</span></label>
+    </div>
+  </div>
+
+  <div class="step" data-step="input">
+    <h2>Input</h2>
+    <div data-when="prompt">
+      <label>Describe one object, whole, centred, on a plain white background
+        <textarea id="prompt" rows="4" placeholder="A painted fantasy miniature figurine of a stout dwarf warrior... studio product photo, plain white background"></textarea></label>
+      <div class="row">
+        <label>Seed <input id="t2i_seed" type="number" value="7"></label>
+        <label>Size <select id="t2i_size"><option>1024x1024</option><option>768x768</option></select></label>
+        <label>Iris-3B <select id="t2i_mode">
+          <option value="auto">as in Settings</option><option value="cpu-encoder">local, text encoder on CPU (8 GB GPUs)</option>
+          <option value="gpu">local, all on GPU (16 GB+)</option><option value="space">online Space</option></select></label>
+      </div>
+    </div>
+    <div data-when="image">
+      <label>Picture (.png for renders and generated images, .jpg for photos)
+        <input id="image" type="file" accept="image/*"></label>
+      <img id="image_preview" class="preview" alt="">
+    </div>
+    <div data-when="splat">
+      <label>Splat (.ply) <input id="splat" type="file" accept=".ply"></label>
+      <label>Idol's camera (_camera.json) <input id="camera" type="file" accept=".json"></label>
+      <label>Idol's input picture (_input.png) <input id="input" type="file" accept="image/*"></label>
+    </div>
+    <div data-when="batch">
+      <div class="row">
+        <label class="card small"><input type="radio" name="batchkind" value="prompts" checked><b>Sentences</b></label>
+        <label class="card small"><input type="radio" name="batchkind" value="images"><b>Pictures</b></label>
+      </div>
+      <label data-when-batch="prompts">One sentence per line
+        <textarea id="batch_prompts" rows="8"></textarea></label>
+      <label data-when-batch="images">Pictures <input id="batch_images" type="file" accept="image/*" multiple></label>
+    </div>
+  </div>
+
+  <div class="step" data-step="splat3d">
+    <h2>3D (Idol)</h2>
+    <p class="hint">Idol invents the sides the picture does not show; every seed invents them differently. With more than
+      one seed, each is rendered from four sides with athenea and scored by DeepSeek against the picture, and the best
+      is kept (about 4–5 min per seed on an 8 GB GPU).</p>
+    <div class="row">
+      <label>Seeds <input id="seeds" type="range" min="1" max="8" value="1"><output id="seeds_v">1</output></label>
+      <label>Gaussians <select id="gaussians">
+        <option value="131072">131 072 (fast)</option><option value="262144" selected>262 144</option>
+        <option value="524288">524 288 (detail)</option><option value="1048576">1 048 576 (max)</option></select></label>
+    </div>
+  </div>
+
+  <div class="step" data-step="outputs">
+    <h2>Outputs</h2>
+    <label class="check"><input id="out_splat" type="checkbox" checked>
+      <span><b>Relightable splat with materials</b> — no geometry at any step: parts found on renders of the splat,
+      materials, normals and albedo per gaussian, glass as surfels. USD for athenea.</span></label>
+    <label class="check"><input id="out_mesh" type="checkbox">
+      <span><b>Mesh USD</b> — one closed mesh, UVs, 4K texture, UsdPreviewSurface + MaterialX.</span></label>
+    <label class="check"><input id="out_materials" type="checkbox" checked>
+      <span><b>PBR materials</b> — DeepSeek names the parts by material, ENEAS finds them, a 60-material library
+      gives roughness, metallic, IOR, transmission… (needs a DeepSeek key)</span></label>
+    <div class="row" data-when-out="mesh">
+      <label>Faces <input id="faces" type="number" value="80000" step="10000"></label>
+      <label>Texture <select id="tex"><option>2048</option><option selected>4096</option></select></label>
+    </div>
+    <details><summary>Parts by hand (optional)</summary>
+      <p class="hint">Instead of the automatic list: <code>material: part, part; material: part</code> with the
+        library's names, e.g. <code>leather: the boots, the belt; polished steel: the helmet</code>.</p>
+      <textarea id="parts" rows="3"></textarea></details>
+  </div>
+
+  <div class="step" data-step="render">
+    <h2>Render (athenea)</h2>
+    <label class="check"><input id="tt" type="checkbox" checked><span><b>Turntable video</b> of each output</span></label>
+    <div class="row">
+      <label>Frames <input id="frames" type="number" value="48" min="8" max="240"></label>
+      <label>Size <select id="size"><option>720</option><option selected>900</option><option>1080</option></select></label>
+      <label>Technique <select id="technique"><option value="raster" selected>raster (fast)</option>
+        <option value="rt">path traced (glass refracts)</option></select></label>
+      <label>Light <select id="hdri"></select></label>
+    </div>
+  </div>
+
+  <div class="step" data-step="review">
+    <h2>Summary</h2>
+    <dl id="summary" class="summary"></dl>
+    <label>Name <input id="jobname" placeholder="object"></label>
+    <p id="warn" class="warn"></p>
+  </div>
+
+  <div class="nav">
+    <button id="back" class="ghost">Back</button>
+    <button id="next">Next</button>
+    <button id="run" class="go">Start</button>
+  </div>
+</section>
+
+<!-- ============================================================ JOBS -->
+<section id="jobs" class="page">
+  <h2>Jobs</h2>
+  <div id="joblist"></div>
+</section>
+
+<!-- ============================================================ COMPONENTS -->
+<section id="components" class="page">
+  <h2>Components</h2>
+  <p class="hint">Everything runs on this PC. Each component installs under the splat2mesh folder in its own Python
+    environment. Idol's DINOv3 encoder is gated on Hugging Face: accept its terms with your account first, and give a
+    token below for the download only (it is not stored).</p>
+  <div id="complist" class="cards wide"></div>
+  <div class="row">
+    <label>Hugging Face token (download only) <input id="hf_token" type="password" autocomplete="off"></label>
+    <label>FLUX.2 VAE for Idol <select id="vae">
+      <option value="klein" selected>FLUX.2-klein-4B (Apache-2.0, same weights)</option>
+      <option value="dev">FLUX.2-dev (non-commercial)</option></select></label>
+    <label>Iris-3B <select id="iris_mode_inst">
+      <option value="cpu-encoder" selected>local, text encoder on CPU (8 GB GPUs)</option>
+      <option value="gpu">local, all on GPU (16 GB+)</option><option value="space">online Space only</option></select></label>
+  </div>
+  <button id="install_all" class="go">Install everything missing</button>
+  <p class="hint">Links: <a href="https://huggingface.co/facebook/dinov3-vith16plus-pretrain-lvd1689m" target="_blank">DINOv3 terms</a> ·
+    <a href="https://huggingface.co/settings/tokens" target="_blank">Hugging Face tokens</a> ·
+    <a href="https://platform.deepseek.com/api_keys" target="_blank">DeepSeek keys</a></p>
+</section>
+
+<!-- ============================================================ SETTINGS -->
+<section id="settings" class="page">
+  <h2>Settings</h2>
+  <label>DeepSeek API key (part lists and checks; stored in your user folder)
+    <input id="deepseek_key" type="password" autocomplete="off" placeholder="sk-..."></label>
+  <label>Iris-3B (text → picture) <select id="iris_mode">
+    <option value="cpu-encoder">local, text encoder on CPU (8 GB GPUs)</option>
+    <option value="gpu">local, all on GPU (16 GB+)</option><option value="space">online Space</option></select></label>
+  <button id="save_settings">Save</button> <span id="saved" class="hint"></span>
+  <h3>Folders</h3>
+  <dl id="folders" class="summary"></dl>
+</section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
