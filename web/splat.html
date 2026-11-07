@@ -106,7 +106,10 @@
       const m = new SplatMesh({ url: `./models/${c.file}`, extSplats: true, onProgress: download.track(`cloud${i}`) });
       scene.add(m); return m;
     });
-    const relight = atheneaRelightPlugin({ pixelDetail: false, ...(params.has("glassCover") ? { glassCover: Number(params.get("glassCover")) } : {}) });
+    // glassCover: how much of a glass cloud is drawn as its lens (8: all of it, so it refracts; athenea's own alpha
+    // lets much of the view straight through). ?glassCover= or the model's json
+    const cover = params.get("glassCover") ?? info.glassCover;
+    const relight = atheneaRelightPlugin({ pixelDetail: false, ...(cover != null ? { glassCover: Number(cover) } : {}) });
     clouds.forEach((c, i) => { if (c.ior) relight.setIor(meshes[i], c.ior); });
     const display = atheneaOutputPlugin({ view: params.get("view") ?? "agx", exposure: 0 });
     let host = null;
