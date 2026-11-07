@@ -33,8 +33,28 @@ def _quat_from_frames(t1, t2, n):
     return q / np.linalg.norm(q, axis=1, keepdims=True)
 
 
-def glass_surfels(asset_dir, xyz, q, scl, op, sel_glass, ior=None, tol_voxels: float = 2.5, cell_voxels: float = 1.5,
-                  clear_voxels: float = 2.0):
+LOOSE_VOXELS = 2.0          # opaque gaussians this far in front of the mesh surface are dropped (stray glints)
+SOLID_GLASS_COVER = 0.12    # athenea: a solid dielectric's surface cover that reads as "seen through" in raster too
+
+
+def surface_normals(asset_dir, xyz):
+    """The mesh's shading normal at the surface point nearest to each gaussian, and the distance to it. Without a
+    normal athenea takes a gaussian's shortest axis, random on Idol's near-round gaussians (stray glints)."""
+    from scipy.spatial import cKDTree
+    from .materials import _raster
+    from PIL import Image
+    asset = Path(asset_dir)
+    pos, nrm, mask = _raster(asset, Image.open(asset / "basecolor.png").size[0])
+    P, N = pos[mask], nrm[mask]
+    step = max(1, len(P) // 2_000_000); P, N = P[::step], N[::step]
+    N = N / np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-9)
+    d, i = cKDTree(P).query(xyz)
+    outside = np.einsum("ij,ij->i", xyz - P[i], N[i]) > 0             # in front of the surface, not under it
+    return N[i].astype(np.float32), np.where(outside, d, -d)
+
+
+def glass_surfels(asset_dir, xyz, q, scl, op, sel_glass, ior=None, thin=None, tol_voxels: float = 2.5,
+                  cell_voxels: float = 1.5, clear_voxels: float = 2.0):
     """Idol leaves glass as a haze: thousands of faint gaussians through a shell centimetres thick, which a
     refracting renderer reads as smoke. Keep only the glass gaussians on the mesh's surface and make them surfels:
     the surface normal (athenea:splat:normal), flat along it, wide enough to close the surface, nearly opaque.
@@ -85,9 +105,13 @@ def glass_surfels(asset_dir, xyz, q, scl, op, sel_glass, ior=None, tol_voxels: f
     # sheet's reflectance and the rest passes straight (mesh2splat's m2sGlassCovers)
     i_ = np.asarray(ior[k] if ior is not None else np.full(len(k), 1.5), np.float64)
     r0 = ((i_ - 1) / (i_ + 1)) ** 2
-    # that value is the COVER the overlapping discs add up to; a disc of sigma s at spacing h covers 2π·s²/h² cells
-    op[k] = (2 * r0 / (1 + r0) / (2 * np.pi * SIGMA ** 2)).astype(np.float32)
-    return keep, k, n
+    # that value is the COVER the overlapping discs add up to; a disc of sigma s at spacing h covers 2π·s²/h² cells.
+    # A solid dielectric (thin = False: a crystal, a glass block) is a real surface instead: cover SOLID_GLASS_COVER,
+    # the light goes through by transmission, tinted at each of its two crossings by the albedo
+    tw = np.ones(len(k), bool) if thin is None else thin[k]
+    cover = np.where(tw, 2 * r0 / (1 + r0), SOLID_GLASS_COVER)
+    op[k] = (cover / (2 * np.pi * SIGMA ** 2)).astype(np.float32)
+    return keep, k, n, tw
 
 
 def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False, glass_surface=None) -> dict:
@@ -112,10 +136,31 @@ def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False, glass
     attr = lambda k, d: np.asarray(v[k], np.float32) if k in v.dtype.names else np.full(n, d, np.float32)
     metal, rough, trans, ior = attr("metallic", 0), attr("roughness", 0.5), attr("transmission", 0), attr("ior", 1.5)
     normals = np.zeros_like(xyz); has_n = np.zeros(n, bool); thin = np.zeros(n, np.int32)
+    drop = np.zeros(n, bool)
+    if glass_surface is not None:
+        normals, sd = surface_normals(glass_surface, xyz); has_n[:] = True
+        # loose gaussians floating in front of the surface catch the light as stray glints: dropped (those under the
+        # surface are hidden and stay)
+        rep = json.loads((Path(glass_surface) / "report.json").read_text()) if (Path(glass_surface) / "report.json").exists() else {}
+        drop = (trans <= 0) & (sd > LOOSE_VOXELS * float(rep.get("voxel") or 0.0025))
+        print(f"loose gaussians off the surface: {int(drop.sum())}", flush=True)
     if glass_surface is not None and (trans > 0).any():
-        keep, k, nk = glass_surfels(glass_surface, xyz, q, scl, op, trans > 0, ior=ior)
-        normals[k] = nk; has_n[k] = True; thin[k] = 1
-        print(f"glass: {int((trans > 0).sum())} gaussians → {len(k)} surfels on the surface", flush=True)
+        # thin-walled or solid per material (the finish pass's flag), through the per-gaussian mat_id
+        thin_g = np.ones(n, bool)
+        fin = Path(glass_surface) / "mat" / "finish.json"; names_f = Path(ply).with_name("mat_names.json")
+        if fin.exists() and names_f.exists() and "mat_id" in v.dtype.names:
+            cls = json.loads(fin.read_text()); cls = cls.get("classes", cls)
+            names = json.loads(names_f.read_text())["mat_id"]; mid = np.asarray(v["mat_id"]).astype(int)
+            for i, nm in enumerate(names):
+                thin_g[mid == i] = bool(cls.get(nm.split("|")[0], {}).get("thin_walled", True))
+        keep, k, nk, tw = glass_surfels(glass_surface, xyz, q, scl, op, trans > 0, ior=ior, thin=thin_g)
+        normals[k] = nk; thin[k] = tw.astype(np.int32)
+        drop &= keep; keep &= ~drop
+    elif drop.any():
+        keep = ~drop
+    if glass_surface is not None and (drop.any() or (trans > 0).any()):
+        if (trans > 0).any():
+            print(f"glass: {int((trans > 0).sum())} gaussians → {len(k)} surfels on the surface", flush=True)
         sel_all = np.nonzero(keep)[0]
         xyz, q, scl, op, dc = xyz[sel_all], q[sel_all], scl[sel_all], op[sel_all], dc[sel_all]
         metal, rough, trans, ior = metal[sel_all], rough[sel_all], trans[sel_all], ior[sel_all]

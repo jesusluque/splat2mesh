@@ -4,7 +4,7 @@
   One relightable splat from splat2mesh: the Idol splat with per-gaussian materials (albedo, metallic, roughness)
   found on the splat itself, relit live under any HDRI by athenea's relighting code in Spark's WebGPU backend
   (the viewer of sparkwebgpu.lucab.co.uk).
-    ?model=<name>   models/<name>.athc  (athenea .athc v3, relight + linear)
+    ?model=<name>   models/<name>.athc, or the clouds listed in models/<name>.json ({"clouds": [{"file", "ior"}]})
     ?hdri=<name>    ?hdriBase=<url/>    ?view=agx|aces2|standard    ?gui=0    ?az=<deg> (front azimuth)
 -->
 <head>
@@ -92,9 +92,15 @@
 
     const spark = new SparkRenderer({ renderer, hdr: true });
     scene.add(spark);
-    const splat = new SplatMesh({ url: `./models/${model}.athc`, extSplats: true, onProgress: download.track("splat") });
-    scene.add(splat);
+    // models/<name>.json: bounds, front azimuth and, for several clouds (opaque + glass of some ior), their list
+    const info = await fetch(`./models/${model}.json`).then((r) => r.json()).catch(() => ({}));
+    const clouds = info.clouds ?? [{ file: `${model}.athc` }];
+    const meshes = clouds.map((c, i) => {
+      const m = new SplatMesh({ url: `./models/${c.file}`, extSplats: true, onProgress: download.track(`cloud${i}`) });
+      scene.add(m); return m;
+    });
     const relight = atheneaRelightPlugin({ pixelDetail: false });
+    clouds.forEach((c, i) => { if (c.ior) relight.setIor(meshes[i], c.ior); });
     const display = atheneaOutputPlugin({ view: params.get("view") ?? "agx", exposure: 0 });
     let host = null;
 
@@ -115,15 +121,14 @@
 
     try {
       await setHdri(state.hdri);
-      await splat.initialized;
+      await Promise.all(meshes.map((m) => m.initialized));
       await spark.webgpuReady;
       window.__splat.loaded = true;
     } catch (error) { window.__splat.error = String(error); status.textContent = `error: ${error}`; console.error(error); }
     download.done();
 
     // frame the cloud from its front (the side the picture showed)
-    // bounds and the front azimuth from models/<name>.json (written with the .athc)
-    const info = await fetch(`./models/${model}.json`).then((r) => r.json()).catch(() => ({}));
+    // frame from the bounds and the front azimuth in models/<name>.json
     const box = new THREE.Box3(new THREE.Vector3(...(info.boundsMin ?? [-0.5, -0.5, -0.5])), new THREE.Vector3(...(info.boundsMax ?? [0.5, 0.5, 0.5])));
     const c = box.getCenter(new THREE.Vector3()), rad = box.getSize(new THREE.Vector3()).length() / 2;
     const az = THREE.MathUtils.degToRad(Number(params.get("az") ?? info.frontAzimuthDeg ?? 0)), el = THREE.MathUtils.degToRad(12);
