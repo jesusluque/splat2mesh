@@ -170,3 +170,30 @@ def write_ply(ply, out_ply, votes_g: np.ndarray, names: list, y_down: bool = Tru
     write_vertex(out_ply, out)
     Path(out_ply).with_name("mat_names.json").write_text(json.dumps({"mat_id": names}, indent=1))
     return {n: round(float((mid == i).mean()), 4) for i, n in enumerate(names)}
+
+
+def add_albedo(asset_dir, ply_in, ply_out=None, y_down: bool = True) -> dict:
+    """Per-gaussian albedo from the finished base colour of the mesh (basecolor_delit.png: highlights removed,
+    metals at their F0 colour): each gaussian takes the texel nearest to its centre. Written as albedo_r/g/b
+    (linear, 0..1) next to Idol's f_dc_*, which is baked radiance (light included) and so not for relighting."""
+    from .materials import _raster
+    asset = Path(asset_dir)
+    tex = np.asarray(Image.open(asset / "basecolor_delit.png").convert("RGB"), np.float32)[::-1] / 255.0
+    R = tex.shape[0]
+    pos, _, mask = _raster(asset, R)
+    P = pos[mask]; C = tex[mask]
+    step = max(1, len(P) // 2_000_000)
+    tree = cKDTree(P[::step]); C = C[::step]
+    v = read_vertex(ply_in)
+    xyz = np.stack([v["x"], v["y"], v["z"]], 1).astype(np.float64) * (np.array([1.0, -1.0, -1.0]) if y_down else 1)
+    d, nn = tree.query(xyz, k=4)
+    w = 1.0 / np.maximum(d, 1e-6)
+    srgb = (C[nn] * w[..., None]).sum(1) / w.sum(1, keepdims=True)
+    lin = np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4).astype(np.float32)
+    names = [n for n in v.dtype.names if n not in ("albedo_r", "albedo_g", "albedo_b")]
+    out = np.empty(len(v), dtype=[(n, v.dtype[n]) for n in names] + [(c, "<f4") for c in ("albedo_r", "albedo_g", "albedo_b")])
+    for n in names:
+        out[n] = v[n]
+    out["albedo_r"], out["albedo_g"], out["albedo_b"] = lin.T
+    write_vertex(ply_out or ply_in, out)
+    return {"gaussians": len(v), "surface_distance_median": float(np.median(d[:, 0]))}

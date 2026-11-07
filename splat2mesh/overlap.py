@@ -25,7 +25,8 @@ def _ask_majority(ask, sheet, q, field, runs=3):
     votes = {}
     for _ in range(runs):
         try:
-            for j, v in ask(sheet, q).get(field, {}).items():
+            got = ask(sheet, q)
+            for j, v in (got.get(field, {}) if field else got).items():
                 votes.setdefault(str(j), Counter())[_norm(v)] += 1
         except Exception:
             continue
@@ -60,28 +61,8 @@ def verify(masks, frames, ann_index, photo, parts, ask):
         return masks, {}, None
     F, H, W = next(iter(masks.values())).shape
     im = np.asarray(Image.open(frames[ann_index]).convert("RGB").resize((W, H)), np.float32)
-    T = 256
-    obj = np.zeros((H, W), bool)
-    for k in keys:
-        obj |= masks[k][ann_index]
-    ys, xs = np.nonzero(im.min(-1) < 245)
-    box = (xs.min(), ys.min(), xs.max() + 1, ys.max() + 1) if len(xs) else (0, 0, W, H)
-    sheet = Image.new("RGB", ((len(keys) + 1) * T, T + 24), "white"); d = ImageDraw.Draw(sheet)
-    p = Image.open(photo).convert("RGB"); p.thumbnail((T, T)); sheet.paste(p, (0, 24)); d.text((6, 4), "PHOTO", fill="black")
-    for j, k in enumerate(keys):
-        m = masks[k][ann_index]
-        t = im * 0.45 + 255 * 0.55
-        t[m] = im[m] * 0.35 + np.array([255, 30, 30]) * 0.65
-        tile = Image.fromarray(t.astype(np.uint8)).crop(box); tile.thumbnail((T, T))
-        sheet.paste(tile, ((j + 1) * T, 24)); d.text(((j + 1) * T + 6, 4), f"tile {j}", fill="black")
-    q = ("First picture: a photo of an object. The other tiles show a render of its 3D model with one region "
-         "highlighted in red. For each tile, does the red region show the named part? Answer \"yes\" (it is that "
-         "part, maybe a little more or less), \"partly\" (that part plus large areas of other parts) or \"no\" (it is "
-         "mostly another part). Tiles: " + "; ".join(f'tile {j}: "{parts[k]}"' for j, k in enumerate(keys)) +
-         ". Answer JSON: {\"tiles\": {\"0\": \"yes|partly|no\", ...}}")
-    ans = {keys[int(j)]: v for j, v in _ask_majority(ask, sheet, q, "tiles").items()
-           if j.isdigit() and int(j) < len(keys)}
-    out = {k: (np.zeros_like(v) if ans.get(k) == "no" else v) for k, v in masks.items()}
+    out = {k: v.copy() for k, v in masks.items()}
+    ans = {}
     # a sub-part phrase ("the helmet horns") whose mask is the same as its whole's ("the steel helmet"): ENEAS could
     # not isolate the sub-part, so the mask belongs to the whole (the sub-part's class stays listed)
     head = lambda k: parts[k].lower().split()[-1]
@@ -94,6 +75,47 @@ def verify(masks, frames, ann_index, photo, parts, ask):
             if iou > DUPLICATE:
                 print(f"mask of {parts[b]!r} is the whole {parts[a]!r} (IoU {iou:.2f}): emptied", flush=True)
                 out[b] = np.zeros_like(out[b]); ans[b] = "whole"
+    keys = [k for k in keys if out[k][ann_index].any()]
+    # one call per phrase (photo + its tile), majority of 3: on one sheet with many numbered tiles the answers got
+    # attached to the wrong tiles. The model NAMES what the red region shows among all parts ("is this X?" was
+    # answered yes for "the shield" highlighted on the base)
+    from concurrent.futures import ThreadPoolExecutor
+    T = 384
+    ys, xs = np.nonzero(im.min(-1) < 245)
+    box = (xs.min(), ys.min(), xs.max() + 1, ys.max() + 1) if len(xs) else (0, 0, W, H)
+    p = Image.open(photo).convert("RGB"); p.thumbnail((T, T))
+    allp = sorted({parts[k] for k in masks})
+    q = ("Left: a photo of an object. Right: a render of its 3D model with one region highlighted in red. Parts of "
+         "the object: " + "; ".join(f'"{x}"' for x in allp) + ". Name the ONE listed part the red region mostly shows "
+         "(copy the part text exactly), or \"several\" when it covers several parts about equally. "
+         "Answer JSON: {\"part\": \"<part or several>\"}")
+    def tile_sheet(k):
+        m = out[k][ann_index]
+        t = im * 0.45 + 255 * 0.55
+        t[m] = im[m] * 0.35 + np.array([255, 30, 30]) * 0.65
+        tile = Image.fromarray(t.astype(np.uint8)).crop(box); tile.thumbnail((T, T))
+        sh = Image.new("RGB", (2 * T, T), "white"); sh.paste(p, (0, 0)); sh.paste(tile, (T, 0))
+        return sh
+    def name(k):
+        return _ask_majority(ask, tile_sheet(k), q, None).get("part")
+    with ThreadPoolExecutor(4) as ex:
+        named = dict(zip(keys, ex.map(name, keys)))
+    sheet = Image.new("RGB", (len(keys) * T // 2, T // 2 + 24), "white"); d = ImageDraw.Draw(sheet)
+    for j, k in enumerate(keys):
+        sh = tile_sheet(k).crop((T, 0, 2 * T, T)).resize((T // 2, T // 2)); sheet.paste(sh, (j * T // 2, 24))
+        d.text((j * T // 2 + 4, 4), f"{parts[k][:22]} → {named.get(k)}"[:40], fill="black")
+    # a mask named as another part X is X's only when it largely is X's mask too (IoU > 0.5): "the shield" grounded
+    # on the base. Otherwise the answer only says the mask spills (a whole axe for "the axe handle"): resolve() trims it
+    norm2key = {_norm(parts[k]): k for k in masks}
+    iou = lambda a, b: (a & b).sum() / max((a | b).sum(), 1)
+    for k in keys:
+        v = named.get(k)
+        if v == _norm(parts[k]):
+            ans[k] = "yes"
+        elif v in norm2key and out[norm2key[v]].any() and iou(out[k], out[norm2key[v]]) > 0.5:
+            ans[k] = f"no: {v}"; out[k] = np.zeros_like(out[k])
+        else:
+            ans[k] = f"partly ({v})"
     return out, ans, sheet
 
 

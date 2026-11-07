@@ -205,4 +205,7 @@ if GS:
 else:
     print(from_view_masks(spec, orbit, masks))
 print(apply_texel_classes(spec))
+if GS:                                  # relightable splat: the finished albedo per gaussian
+    from splat2mesh.gs_materials import add_albedo
+    print("splat albedo:", add_albedo(asset, asset / "mat" / "splat_materials.ply"))
 print('parts', export_parts(asset), export_parts(asset, 'asset_materials.usda', group='material'))
