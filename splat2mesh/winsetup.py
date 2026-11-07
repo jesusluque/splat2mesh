@@ -302,6 +302,10 @@ def install_eneas():
     progress(100, c, "ready (its weights, ~9 GB, download on the first segmentation)")
 
 
+IRIS_DEPS = ["transformers>=4.57.0", "accelerate>=1.2", "omegaconf>=2.3", "safetensors>=0.4", "huggingface_hub[hf_xet]>=0.26",
+             "pillow>=10.0", "numpy>=1.26", "matplotlib>=3.8"]
+
+
 def install_iris(mode: str = "cpu-encoder"):
     c = "iris"
     if mode == "space":
@@ -314,8 +318,11 @@ def install_iris(mode: str = "cpu-encoder"):
     py = venv_python(d / ".venv")
     progress(10, c, "PyTorch with CUDA 12.8")
     run([uv(), "pip", "install", "--python", py, "torch", "torchvision", "--index-url", TORCH_INDEX], c)
-    progress(45, c, "Iris and its dependencies")
-    run([uv(), "pip", "install", "--python", py, "-e", d], c)
+    progress(45, c, "Iris and its inference dependencies")
+    # not dion (an optimizer installed from git, for training) nor wandb: a clean Windows has no git, and
+    # inference imports neither
+    run([uv(), "pip", "install", "--python", py, *IRIS_DEPS], c)
+    run([uv(), "pip", "install", "--python", py, "--no-deps", "-e", d], c)
     progress(55, c, "weights: Iris-3B Turbo and Qwen3-VL-4B (~14 GB)")
     script = f"""
 from huggingface_hub import snapshot_download
