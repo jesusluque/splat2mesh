@@ -8,7 +8,7 @@
 
 #define AppName "splat2mesh"
 #ifndef AppVersion
-  #define AppVersion "0.4.2"
+  #define AppVersion "0.4.3"
 #endif
 #ifndef Staging
   #define Staging "staging"
@@ -227,14 +227,14 @@ begin
   if CurStep <> ssPostInstall then Exit;
   Failed := '';
   RunPage := CreateOutputProgressPage('Installing the components', 'Each one installs under ' + ExpandConstant('{app}\tools') + '.');
-  RunPage.Show;
+  if not WizardSilent then RunPage.Show;     { a silent install shows no pages (showing one left Setup waiting) }
   try
     if not RunStep('Core: uv, Python 3.12, splat2mesh', 'powershell.exe',
          '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\installer\bootstrap.ps1') + '" -Root "'
          + ExpandConstant('{app}') + '"', 0, 120) then
     begin
-      MsgBox('The core step failed:' + #13#10 + Failed + #13#10 + 'See the log (Setup''s /LOG option) and run '
-        + '"Install or repair components" from the Start menu to retry.', mbError, MB_OK);
+      SuppressibleMsgBox('The core step failed:' + #13#10 + Failed + #13#10 + 'See the log (Setup''s /LOG option) and run '
+        + '"Install or repair components" from the Start menu to retry.', mbError, MB_OK, IDOK);
       Exit;
     end;
     Py := ExpandConstant('{app}\.venv\Scripts\python.exe');
@@ -270,10 +270,10 @@ begin
     end;
     DeleteFile(ExpandConstant('{tmp}\hf.txt')); DeleteFile(ExpandConstant('{tmp}\ds.txt'));
     if Failed <> '' then
-      MsgBox('Some steps did not finish:' + #13#10 + Failed + #13#10
+      SuppressibleMsgBox('Some steps did not finish:' + #13#10 + Failed + #13#10
         + 'The rest is installed. Retry from the app (Components) or "Install or repair components" in the Start menu.',
-        mbInformation, MB_OK);
+        mbInformation, MB_OK, IDOK);
   finally
-    RunPage.Hide;
+    if not WizardSilent then RunPage.Hide;
   end;
 end;
