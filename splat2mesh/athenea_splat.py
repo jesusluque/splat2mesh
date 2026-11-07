@@ -58,6 +58,10 @@ GLASS_THICKEN = 12.0        # Idol's glass gaussians are faint: their opacity ×
 GLASS_LEVEL = 0.3
 GLASS_BLUR = 2.0            # voxels: the solid is blurred before its level set is taken, so the faces are smooth
                             # (each ripple would send a refracted ray elsewhere in the sky)
+NORMAL_K, NORMAL_EDGE_DEG = 16, 30.0
+GLASS_NORMAL_BLUR = 3.5     # voxels: normals and curvature from a smoother copy of the field. The voxel solid's
+                            # staircase still ripples the level set at GLASS_BLUR (neighbouring surfels 6.5° apart,
+                            # twice mesh2splat's spread), and a lens refracts every ripple: swirls
 
 
 def implicit_glass_surface(xyz, scl, q, op, sel_glass, res: int = GLASS_RES):
@@ -93,9 +97,37 @@ def implicit_glass_surface(xyz, scl, q, op, sel_glass, res: int = GLASS_RES):
         p = np.stack(idx, 1).astype(np.float64); p[:, ax] += t
         ga = grad[tuple(a)][idx]; gb = grad[tuple(b)][idx]
         P.append(p); N.append(-(ga * (1 - t)[:, None] + gb * t[:, None]))          # outward: down the field
-    P = (np.concatenate(P) - 1) * step + lo
-    N = np.concatenate(N); N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
-    return P.astype(np.float32), N.astype(np.float32), float(step)
+    G = np.concatenate(P)                                                            # grid coordinates
+    P = (G - 1) * step + lo
+    fs = np.pad(ndi.gaussian_filter(solid.astype(np.float32), GLASS_NORMAL_BLUR), 1) - 0.5
+    from scipy.ndimage import map_coordinates
+    gs = np.stack([map_coordinates(np.gradient(fs, axis=i), G.T, order=1, mode="nearest") for i in range(3)], 1)
+    N = -gs
+    N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
+    return P.astype(np.float32), N.astype(np.float32), float(step), (fs, lo, step)
+
+
+def field_curvature(field, P, t1, t2):
+    """Shape operator of the implicit surface at P in each surfel's own first two axes (uu, uv, vv), 1/m, positive
+    where the surface turns away from its outward normal (convex seen from outside): mesh2splat's
+    primvars:athenea:splat:curvature. With phi = -f (growing outwards), S = P·Hess(phi)·P / |grad phi|; the
+    derivatives are central differences of a cubic spline of the field one grid step apart."""
+    from scipy.ndimage import map_coordinates
+    f, lo, step = field
+    phi = -f
+    g = (np.asarray(P, np.float64) - lo) / step + 1                    # grid coordinates (the field is padded by 1)
+    at = lambda d: map_coordinates(phi, (g + d).T, order=3, mode="nearest")
+    E = np.eye(3)
+    f0 = at(0)
+    grad = np.stack([(at(E[i]) - at(-E[i])) / 2 for i in range(3)], 1)
+    H = np.zeros((len(g), 3, 3))
+    for i in range(3):
+        H[:, i, i] = at(E[i]) - 2 * f0 + at(-E[i])
+        for j in range(i + 1, 3):
+            H[:, i, j] = H[:, j, i] = (at(E[i] + E[j]) - at(E[i] - E[j]) - at(E[j] - E[i]) + at(-E[i] - E[j])) / 4
+    gn = np.maximum(np.linalg.norm(grad, axis=1), 1e-9)
+    k = lambda a, b: np.einsum("ni,nij,nj->n", a, H, b) / gn / step   # per grid step → per metre
+    return np.stack([k(t1, t1), k(t1, t2), k(t2, t2)], 1).astype(np.float32)
 
 
 def _cover_opacity(ior, thin, sigma):
@@ -114,7 +146,7 @@ def implicit_glass_surfels(xyz, q, scl, op, sel_glass, ior, thin, clear_voxels: 
     keeps clear of them. Returns new gaussians (pos, quat w x y z, scale, opacity, normal, thin) and, for each,
     the glass gaussian it takes its other attributes from (ior, colour…)."""
     from scipy.spatial import cKDTree
-    P, N, vox = implicit_glass_surface(xyz, scl, q, op, sel_glass)
+    P, N, vox, field = implicit_glass_surface(xyz, scl, q, op, sel_glass)
     gi = np.nonzero(sel_glass)[0]
     _, idx = cKDTree(xyz[gi]).query(P)
     src = gi[idx]
@@ -132,6 +164,13 @@ def implicit_glass_surfels(xyz, q, scl, op, sel_glass, ior, thin, clear_voxels: 
     ks = key[order]; first = np.ones(len(order), bool); first[1:] = np.any(ks[1:] != ks[:-1], axis=1)
     pick = order[first]
     P, N, src, tw = P[pick], N[pick], src[pick], tw[pick]
+    # facets, not ripples: each normal averaged with its neighbours' that face within NORMAL_EDGE_DEG of it (an edge
+    # between two faces keeps both), twice
+    _, nn = cKDTree(P).query(P, k=NORMAL_K)
+    for _ in range(2):
+        cos = np.einsum("nkd,nd->nk", N[nn], N)
+        w = (cos > np.cos(np.radians(NORMAL_EDGE_DEG))).astype(np.float32)
+        N = np.einsum("nk,nkd->nd", w, N[nn]); N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
     a = np.where(np.abs(N[:, 0:1]) < 0.9, np.array([[1.0, 0, 0]]), np.array([[0, 1.0, 0]]))
     t1 = np.cross(N, a); t1 /= np.linalg.norm(t1, axis=1, keepdims=True); t2 = np.cross(N, t1)
     # a solid is a real surface the path tracer bends every ray at, twice (in and out): fully covering, as
@@ -144,7 +183,8 @@ def implicit_glass_surfels(xyz, q, scl, op, sel_glass, ior, thin, clear_voxels: 
     scale = np.stack([st, st, np.maximum(st * 0.05, 1e-5)], 1)
     i_ = ior[src] if ior is not None else np.full(len(P), 1.5)
     opacity = np.where(solid_full, 1.0, _cover_opacity(i_, tw, 0.75)).astype(np.float32)
-    return P, _quat_from_frames(t1, t2, N).astype(np.float32), scale, opacity, N, tw, src
+    curv = field_curvature(field, P, t1, t2)
+    return P, _quat_from_frames(t1, t2, N).astype(np.float32), scale, opacity, N, tw, src, curv
 
 
 def glass_surfels(asset_dir, xyz, q, scl, op, sel_glass, ior=None, thin=None, tol_voxels: float = 2.5,
@@ -231,6 +271,7 @@ def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False, glass
     attr = lambda k, d: np.asarray(v[k], np.float32) if k in v.dtype.names else np.full(n, d, np.float32)
     metal, rough, trans, ior = attr("metallic", 0), attr("roughness", 0.5), attr("transmission", 0), attr("ior", 1.5)
     normals = np.zeros_like(xyz); has_n = np.zeros(n, bool); thin = np.zeros(n, np.int32)
+    curvature = has_k = None
     drop = np.zeros(n, bool)
     if glass_surface is not None:
         normals, sd = surface_normals(glass_surface, xyz); has_n[:] = True
@@ -279,7 +320,7 @@ def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False, glass
                 mid = np.asarray(v["mat_id"]).astype(int)
                 for i, nm in enumerate(names):
                     thin_g[mid == i] = bool(cls.get(nm.split("|")[0], {}).get("thin_walled", True))
-            P, Q, S, O, Nn, tw, add = implicit_glass_surfels(xyz, q, scl, op, trans > 0, ior, thin_g, raster=raster_glass,
+            P, Q, S, O, Nn, tw, add, Kc = implicit_glass_surfels(xyz, q, scl, op, trans > 0, ior, thin_g, raster=raster_glass,
                                                                   cell_voxels=glass_cell)
             print(f"glass: {int((trans > 0).sum())} gaussians → {len(P)} surfels on their own surface", flush=True)
         src = np.concatenate([sel, add])
@@ -287,8 +328,10 @@ def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False, glass
         if len(add):
             q = np.concatenate([q[sel], Q]); scl = np.concatenate([scl[sel], S]); op = np.concatenate([op[sel], O])
             normals = np.concatenate([normals[sel], Nn]); thin = np.concatenate([thin[sel], tw.astype(np.int32)])
+            curvature = np.concatenate([np.zeros((len(sel), 3), np.float32), Kc]); has_k = np.r_[np.zeros(len(sel), bool), np.ones(len(Kc), bool)]
         else:
             q, scl, op, normals, thin = q[sel], scl[sel], op[sel], normals[sel], thin[sel]
+            curvature = has_k = None
         dc, metal, rough, trans, ior = dc[src], metal[src], rough[src], trans[src], ior[src]
         has_n = np.ones(len(xyz), bool); n = len(xyz)
         print(f"floaters dropped: {int(drop.sum())}", flush=True)
@@ -324,6 +367,10 @@ def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False, glass
                              UsdGeom.Tokens.vertex).Set(Vt.FloatArray.FromNumpy(arr[sel]))
         pv.CreatePrimvar("athenea:splat:ior", Sdf.ValueTypeNames.Float, UsdGeom.Tokens.constant).Set(
             float(k) if k > 0 else 0.0)
+        if curvature is not None and has_k[sel].all():
+            # how the surface turns under each glass surfel: what athenea's raster lens bends the exit ray by
+            pv.CreatePrimvar("athenea:splat:curvature", Sdf.ValueTypeNames.FloatArray, UsdGeom.Tokens.vertex,
+                             3).Set(Vt.FloatArray.FromNumpy(curvature[sel].ravel()))
         if has_n[sel].any():
             pv.CreatePrimvar("athenea:splat:normal", Sdf.ValueTypeNames.Normal3fArray, UsdGeom.Tokens.vertex).Set(
                 Vt.Vec3fArray.FromNumpy(normals[sel].astype(np.float32)))
