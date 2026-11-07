@@ -33,7 +33,8 @@ def _quat_from_frames(t1, t2, n):
     return q / np.linalg.norm(q, axis=1, keepdims=True)
 
 
-def glass_surfels(asset_dir, xyz, q, scl, op, sel_glass, tol_voxels: float = 2.5):
+def glass_surfels(asset_dir, xyz, q, scl, op, sel_glass, ior=None, tol_voxels: float = 2.5, cell_voxels: float = 1.5,
+                  clear_voxels: float = 2.0):
     """Idol leaves glass as a haze: thousands of faint gaussians through a shell centimetres thick, which a
     refracting renderer reads as smoke. Keep only the glass gaussians on the mesh's surface and make them surfels:
     the surface normal (athenea:splat:normal), flat along it, wide enough to close the surface, nearly opaque.
@@ -49,19 +50,37 @@ def glass_surfels(asset_dir, xyz, q, scl, op, sel_glass, tol_voxels: float = 2.5
     N = N / np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-9)
     rep = json.loads((asset / "report.json").read_text()) if (asset / "report.json").exists() else {}
     tol = tol_voxels * float(rep.get("voxel") or 0.0025)
+    vox = float(rep.get("voxel") or 0.0025)
     gi = np.nonzero(sel_glass)[0]
     d, idx = cKDTree(P).query(xyz[gi])
     on = d < tol
-    keep = np.ones(len(xyz), bool); keep[gi[~on]] = False
-    k = gi[on]; n = N[idx[on]].astype(np.float32)
-    # spacing of the kept surfels: their disc must reach the neighbours so the glass is closed
-    sp = cKDTree(xyz[k]).query(xyz[k], k=4)[0][:, 1:].mean(1) if len(k) > 4 else np.full(len(k), tol)
+    # not against an opaque part (glass the masks left by the brass base)
+    opq = np.nonzero(~sel_glass)[0]
+    if len(opq):
+        dop, _ = cKDTree(xyz[opq]).query(xyz[gi])
+        on &= dop > clear_voxels * vox
+    cand = gi[on]; cidx = idx[on]
+    # one layer per wall: each surfel sits ON the surface, one per cell (a stack of surfels would act as several
+    # sheets); the kept one is the most opaque gaussian of its cell
+    sp_pos = P[cidx]; cell = cell_voxels * vox
+    key = np.floor(sp_pos / cell).astype(np.int64)
+    order = np.lexsort((-op[cand], key[:, 2], key[:, 1], key[:, 0]))
+    ks = key[order]; first = np.ones(len(order), bool); first[1:] = np.any(ks[1:] != ks[:-1], axis=1)
+    pick = order[first]
+    k = cand[pick]
+    keep = np.ones(len(xyz), bool); keep[gi] = False; keep[k] = True
+    xyz[k] = sp_pos[pick]
+    n = N[cidx[pick]].astype(np.float32)
     a = np.where(np.abs(n[:, 0:1]) < 0.9, np.array([[1.0, 0, 0]]), np.array([[0, 1.0, 0]]))
     t1 = np.cross(n, a); t1 /= np.linalg.norm(t1, axis=1, keepdims=True); t2 = np.cross(n, t1)
     q[k] = _quat_from_frames(t1, t2, n)
-    st = np.maximum(np.sort(scl[k], 1)[:, 1], 0.8 * sp)
+    st = np.full(len(k), 0.6 * cell, np.float32)          # discs that close the surface at this spacing
     scl[k] = np.stack([st, st, np.maximum(st * 0.05, 1e-5)], 1)
-    op[k] = 0.95
+    # athenea's thin wall: opacity 2·R0/(1+R0) (its render scales the reflection by 1/R0), so the blend gives a
+    # sheet's reflectance and the rest passes straight (mesh2splat's m2sGlassCovers)
+    i_ = np.asarray(ior[k] if ior is not None else np.full(len(k), 1.5), np.float64)
+    r0 = ((i_ - 1) / (i_ + 1)) ** 2
+    op[k] = (2 * r0 / (1 + r0)).astype(np.float32)
     return keep, k, n
 
 
@@ -88,7 +107,7 @@ def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False, glass
     metal, rough, trans, ior = attr("metallic", 0), attr("roughness", 0.5), attr("transmission", 0), attr("ior", 1.5)
     normals = np.zeros_like(xyz); has_n = np.zeros(n, bool); thin = np.zeros(n, np.int32)
     if glass_surface is not None and (trans > 0).any():
-        keep, k, nk = glass_surfels(glass_surface, xyz, q, scl, op, trans > 0)
+        keep, k, nk = glass_surfels(glass_surface, xyz, q, scl, op, trans > 0, ior=ior)
         normals[k] = nk; has_n[k] = True; thin[k] = 1
         print(f"glass: {int((trans > 0).sum())} gaussians → {len(k)} surfels on the surface", flush=True)
         sel_all = np.nonzero(keep)[0]
