@@ -98,7 +98,7 @@ the picture, generated on its own with Idol and placed back where it is in the w
 | `athenea_turntable.sh` | tool | path-traced turntable → MP4 |
 | `blender_turntable.py` | tool | turntable in Blender (EEVEE, HDRI) |
 | `gallery_stills.sh`, `exr_over.py`, `compose_gallery.py` | tool | gallery stills under a studio HDRI, composited on grey, into one sheet |
-| `export_web.py` | core | static USDZ web gallery ([materials](materials.md#10-web-gallery)) |
+| `export_web.py` | core | static USDZ web gallery ([materials](materials.md#11-web-gallery)) |
 | `web_all.sh`, `publish_all.sh` | batch | the gallery's model list and publishing run |
 
 ## Post-processing
