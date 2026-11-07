@@ -53,6 +53,96 @@ def surface_normals(asset_dir, xyz):
     return N[i].astype(np.float32), np.where(outside, d, -d)
 
 
+GLASS_RES = 256             # implicit glass surface: grid over the glass gaussians' extent
+GLASS_THICKEN = 12.0        # Idol's glass gaussians are faint: their opacity × this (≤ 0.9) builds the solid
+GLASS_LEVEL = 0.3
+GLASS_BLUR = 2.0            # voxels: the solid is blurred before its level set is taken, so the faces are smooth
+                            # (each ripple would send a refracted ray elsewhere in the sky)
+
+
+def implicit_glass_surface(xyz, scl, q, op, sel_glass, res: int = GLASS_RES):
+    """Points on the glass gaussians' own closed surface, with outward normals, and the grid step: the level set of
+    their (thickened) opacity field, closed and hole-filled, sampled where it crosses between grid nodes. No mesh is
+    made: the points are where marching cubes would put its vertices, the normals the field's gradient."""
+    from scipy import ndimage as ndi
+    from .direct import opacity_field
+    g = np.nonzero(sel_glass)[0]
+    w, x, y, z = q[g].T.astype(np.float64)
+    R = np.stack([
+        np.stack([1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)], -1),
+        np.stack([2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)], -1),
+        np.stack([2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)], -1)], 1)
+    s = scl[g].astype(np.float64)
+    inv = np.einsum("nij,nj,nkj->nik", R, 1 / s ** 2, R)
+    occ, lo, step = opacity_field(xyz[g].astype(np.float64), s, inv, np.clip(op[g] * GLASS_THICKEN, 0, 0.9), res=res)
+    solid = occ > GLASS_LEVEL
+    solid = ndi.binary_closing(np.pad(solid, 3), iterations=3)[3:-3, 3:-3, 3:-3]
+    solid = ndi.binary_fill_holes(solid)
+    lab, nl = ndi.label(solid)
+    if nl > 1:
+        sizes = ndi.sum(solid, lab, range(1, nl + 1))
+        solid = np.isin(lab, np.nonzero(sizes >= 0.02 * sizes.max())[0] + 1)
+    f = np.pad(ndi.gaussian_filter(solid.astype(np.float32), GLASS_BLUR), 1) - 0.5
+    grad = np.stack(np.gradient(f), -1)
+    P, N = [], []
+    for ax in range(3):
+        a = [slice(None)] * 3; b = [slice(None)] * 3; a[ax] = slice(0, -1); b[ax] = slice(1, None)
+        fa, fb = f[tuple(a)], f[tuple(b)]
+        idx = np.nonzero((fa > 0) != (fb > 0))
+        t = fa[idx] / (fa[idx] - fb[idx])
+        p = np.stack(idx, 1).astype(np.float64); p[:, ax] += t
+        ga = grad[tuple(a)][idx]; gb = grad[tuple(b)][idx]
+        P.append(p); N.append(-(ga * (1 - t)[:, None] + gb * t[:, None]))          # outward: down the field
+    P = (np.concatenate(P) - 1) * step + lo
+    N = np.concatenate(N); N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
+    return P.astype(np.float32), N.astype(np.float32), float(step)
+
+
+def _cover_opacity(ior, thin, sigma):
+    """athenea's glass cover (thin wall: 2·R0/(1+R0); solid: SOLID_GLASS_COVER) as a disc's peak opacity: a disc of
+    sigma s at spacing h covers 2π·s²/h² cells."""
+    r0 = ((np.asarray(ior, np.float64) - 1) / (np.asarray(ior, np.float64) + 1)) ** 2
+    cover = np.where(thin, 2 * r0 / (1 + r0), SOLID_GLASS_COVER)
+    return (cover / (2 * np.pi * sigma ** 2)).astype(np.float32)
+
+
+def implicit_glass_surfels(xyz, q, scl, op, sel_glass, ior, thin, clear_voxels: float = 2.0):
+    """Glass as surfels on the glass gaussians' own closed surface (implicit_glass_surface), no mesh: one surfel a
+    grid cell, on the surface point nearest the cell's centre, flat along the field's normal, the cover of its kind.
+    A solid stays closed where it meets opaque parts (a ray entering there would find no way out); a thin wall
+    keeps clear of them. Returns new gaussians (pos, quat w x y z, scale, opacity, normal, thin) and, for each,
+    the glass gaussian it takes its other attributes from (ior, colour…)."""
+    from scipy.spatial import cKDTree
+    P, N, vox = implicit_glass_surface(xyz, scl, q, op, sel_glass)
+    gi = np.nonzero(sel_glass)[0]
+    _, idx = cKDTree(xyz[gi]).query(P)
+    src = gi[idx]
+    tw = np.asarray(thin, bool)[src] if thin is not None else np.ones(len(P), bool)
+    opq = np.nonzero(~sel_glass)[0]
+    if len(opq) and tw.any():
+        dop, _ = cKDTree(xyz[opq]).query(P)
+        ok = ~tw | (dop > clear_voxels * vox)
+        P, N, src, tw = P[ok], N[ok], src[ok], tw[ok]
+    cell = vox
+    key = np.floor(P / cell).astype(np.int64)
+    centre = (key + 0.5) * cell
+    dist = np.linalg.norm(P - centre, axis=1)
+    order = np.lexsort((dist, key[:, 2], key[:, 1], key[:, 0]))
+    ks = key[order]; first = np.ones(len(order), bool); first[1:] = np.any(ks[1:] != ks[:-1], axis=1)
+    pick = order[first]
+    P, N, src, tw = P[pick], N[pick], src[pick], tw[pick]
+    a = np.where(np.abs(N[:, 0:1]) < 0.9, np.array([[1.0, 0, 0]]), np.array([[0, 1.0, 0]]))
+    t1 = np.cross(N, a); t1 /= np.linalg.norm(t1, axis=1, keepdims=True); t2 = np.cross(N, t1)
+    # a solid is a real surface the path tracer bends every ray at, twice (in and out): fully covering, as
+    # mesh2splat writes it (sigma one spacing, opacity 1). A thin wall covers what the sheet reflects
+    SIGMA = np.where(tw, 0.75, 1.0)
+    st = (SIGMA * cell).astype(np.float32)
+    scale = np.stack([st, st, np.maximum(st * 0.05, 1e-5)], 1)
+    i_ = ior[src] if ior is not None else np.full(len(P), 1.5)
+    opacity = np.where(tw, _cover_opacity(i_, tw, 0.75), 1.0).astype(np.float32)
+    return P, _quat_from_frames(t1, t2, N).astype(np.float32), scale, opacity, N, tw, src
+
+
 def glass_surfels(asset_dir, xyz, q, scl, op, sel_glass, ior=None, thin=None, tol_voxels: float = 2.5,
                   cell_voxels: float = 1.5, clear_voxels: float = 2.0):
     """Idol leaves glass as a haze: thousands of faint gaussians through a shell centimetres thick, which a
@@ -60,6 +150,7 @@ def glass_surfels(asset_dir, xyz, q, scl, op, sel_glass, ior=None, thin=None, to
     the surface normal (athenea:splat:normal), flat along it, wide enough to close the surface, nearly opaque.
     Returns (keep mask over all gaussians, normals for the kept glass ones) and edits q, scl, op in place."""
     from scipy.spatial import cKDTree
+    gi = np.nonzero(sel_glass)[0]
     from .materials import _raster
     from PIL import Image
     asset = Path(asset_dir)
@@ -71,7 +162,6 @@ def glass_surfels(asset_dir, xyz, q, scl, op, sel_glass, ior=None, thin=None, to
     rep = json.loads((asset / "report.json").read_text()) if (asset / "report.json").exists() else {}
     tol = tol_voxels * float(rep.get("voxel") or 0.0025)
     vox = float(rep.get("voxel") or 0.0025)
-    gi = np.nonzero(sel_glass)[0]
     d, idx = cKDTree(P).query(xyz[gi])
     on = d < tol
     # not against an opaque part (glass the masks left by the brass base)
@@ -166,6 +256,36 @@ def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False, glass
         metal, rough, trans, ior = metal[sel_all], rough[sel_all], trans[sel_all], ior[sel_all]
         normals, has_n, thin = normals[sel_all], has_n[sel_all], thin[sel_all]
         n = len(xyz)
+    if glass_surface is None and "nx" in v.dtype.names:
+        # finished on the splat itself (gs_finish): normals from its own depth renders, floaters flagged, glass as
+        # surfels on the glass gaussians' own closed surface. No mesh anywhere
+        normals = np.stack([v["nx"], v["ny"], v["nz"]], 1).astype(np.float32)
+        if y_down:
+            normals = normals * np.array([1, -1, -1], np.float32)
+        has_n[:] = True
+        drop = np.asarray(v["loose"]) > 0.5 if "loose" in v.dtype.names else np.zeros(n, bool)
+        sel = np.nonzero(~drop & ~(trans > 0))[0]
+        add = np.zeros(0, int); P = np.zeros((0, 3), np.float32)
+        if (trans > 0).any():
+            thin_g = np.ones(n, bool)
+            fin = Path(ply).with_name("finish.json"); names_f = Path(ply).with_name("mat_names.json")
+            if fin.exists() and names_f.exists() and "mat_id" in v.dtype.names:
+                cls = json.loads(fin.read_text()); names = json.loads(names_f.read_text())["mat_id"]
+                mid = np.asarray(v["mat_id"]).astype(int)
+                for i, nm in enumerate(names):
+                    thin_g[mid == i] = bool(cls.get(nm.split("|")[0], {}).get("thin_walled", True))
+            P, Q, S, O, Nn, tw, add = implicit_glass_surfels(xyz, q, scl, op, trans > 0, ior, thin_g)
+            print(f"glass: {int((trans > 0).sum())} gaussians → {len(P)} surfels on their own surface", flush=True)
+        src = np.concatenate([sel, add])
+        xyz = np.concatenate([xyz[sel], P]).astype(np.float32)
+        if len(add):
+            q = np.concatenate([q[sel], Q]); scl = np.concatenate([scl[sel], S]); op = np.concatenate([op[sel], O])
+            normals = np.concatenate([normals[sel], Nn]); thin = np.concatenate([thin[sel], tw.astype(np.int32)])
+        else:
+            q, scl, op, normals, thin = q[sel], scl[sel], op[sel], normals[sel], thin[sel]
+        dc, metal, rough, trans, ior = dc[src], metal[src], rough[src], trans[src], ior[src]
+        has_n = np.ones(len(xyz), bool); n = len(xyz)
+        print(f"floaters dropped: {int(drop.sum())}", flush=True)
     # one prim per ior among transmitting gaussians (athenea's ior is one per prim); opaque ones in a prim of their own
     key = np.where(trans > 0, np.round(ior, 3), -1.0)
     stage = Usd.Stage.CreateNew(str(out))

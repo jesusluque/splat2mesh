@@ -247,6 +247,41 @@ estimated from each gaussian's curvature and reads the dome, which works on a ba
 For the browser, `usd-athc` (from sparkwebgpu) converts each prim to `.athc`; `web/splat.html` loads them (several
 clouds, each with its ior) and relights them live with athenea's code in Spark WebGPU (`web/README.md`).
 
+## 10b. With no geometry at all (`scripts/splat_flow.py`)
+
+The whole materials chain can run on the splat alone, from a generated picture to a relightable, refracting splat,
+without a mesh at any step (not even a hidden one):
+
+```sh
+.venv/bin/python scripts/splat_flow.py PICTURE.png out/obj --prompt "the prompt the picture came from" --turntable 48
+.venv/bin/python scripts/splat_flow.py SPLAT.ply out/obj --input idol_input.png --camera idol_camera.json
+```
+
+1. Idol makes the splat; DeepSeek lists the parts by material.
+2. athenea renders the splat on 16 views (colour and depth); ENEAS tracks the parts; DeepSeek checks the masks and
+   settles overlaps; every gaussian votes for the part its pixel shows (`materials_eneas3d.py --gs --splat-only`).
+3. `splat2mesh/gs_finish.py` replaces everything the mesh used to give:
+   - **normals** from the same depth renders: each view's depth gives a normal per pixel; a gaussian that is the
+     visible surface takes it, weighted by opacity and by how squarely the view faces it (97 % of the dragon's
+     gaussians get one from the views, the rest from their neighbours);
+   - **floaters**: a gaussian never on the visible surface but in front of it in 3 or more views is too faint to
+     show in the depth, and one wider than 8 % of the object's radius is background or a veil; both are dropped
+     (865 on the dragon, among them the 151 huge, nearly transparent ones that otherwise relit as a grey disc);
+   - **albedo** per material over each gaussian's 32 nearest neighbours of the same material, with the finish pass's
+     rules: metals at the library F0 times their fine luminance detail, frozen highlights on glossy dielectrics back
+     to the piece's colour, a uniform glass at its measured tint (per crossing for a solid, per wall for a thin wall);
+   - `finish.json` beside the PLY (transmission, tint, thin_walled, ior per class).
+4. `athenea_splat` (no `--glass-surface`) builds the glass on the **glass gaussians' own implicit surface**: their
+   opacity field (thickened ×12) on a 256³ grid, closed and hole-filled, blurred 2 voxels, and its level set sampled
+   where it crosses between grid nodes, with the field's gradient as the normal. One surfel per grid cell becomes a
+   new gaussian: a solid at opacity 1 with σ = one spacing (what `mesh2splat` writes, so the path tracer bends every
+   ray in and out), a thin wall at its sheet cover. The haze of Idol's glass gaussians is replaced.
+
+Path traced, the dragon made this way matches the mesh-based `gs_glass` result (the crystal refracts as solid lilac
+glass). What a mesh still gives that this does not: athenea's light **transfer** for the raster/web lens is baked by
+`mesh2splat` against a mesh only, so in raster the mesh-free crystal reads as chrome; the web keeps the crystal as
+Idol captured it. Baking a transfer for a cloud with no mesh would be a new athenea command.
+
 ## 11. Web gallery
 
 `scripts/export_web.py OUTDIR NAME=ASSET_DIR[:TITLE[:SOURCE[:POSTER]]] …` builds a static gallery that uses USD

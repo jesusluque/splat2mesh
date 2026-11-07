@@ -22,6 +22,7 @@ development machines, kept for the record.
 | Script | Status | What |
 |---|---|---|
 | `flow_batch.py` | core | the full materials flow on a folder of assets; `--gs` segments on the splat ([materials](materials.md)) |
+| `splat_flow.py` | core | picture → relightable splat with PBR materials, no geometry at any step ([materials](materials.md) §10b) |
 | `describe_materials.py` | core | Qwen3-VL-4B writes "material: part, part; …" from the picture and prompt |
 | `materials_eneas3d.py` | core | ENEAS on the orbit, overlap resolution, per-texel votes, maps, USD |
 | `eneas_seq.py` | core | runs on the ENEAS host: ground each phrase and track it through the frames |
@@ -130,6 +131,8 @@ was made.
 | `config.py` | the one configuration: athenea, GPU lock, Idol/ENEAS hosts, Iris, DeepSeek, HDRI, notifier ([setup](setup.md)) |
 | `athenea.py` | athenea from Python and its CLI: splat views, stages with `--turntable`/`--cameras`, EXR → PNG |
 | `athenea_splat.py` | a splat with per-gaussian materials → relightable USD for athenea |
+| `gs_finish.py` | the finish pass on the splat alone: normals and floaters from its depth renders, albedo, glass tint |
+| `describe.py` | DeepSeek lists the parts by material; the prompt corrects single parts |
 | `gs_glass.py` | refracting glass on a splat: the material's closed solid → athenea `mesh2splat --transfer` → scene |
 | `remote.py` | Idol and ENEAS locally, on a Linux host or on a Windows host (ENEAS in WSL) |
 | `deepseek.py` | DeepSeek vision client (JSON answers) |

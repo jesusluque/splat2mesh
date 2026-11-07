@@ -11,13 +11,16 @@ ROOT = Path(__file__).resolve().parents[1]; sys.path.insert(0, str(ROOT))
 from splat2mesh.materials import prepare, parse_description, render_orbit, from_view_masks, apply_texel_classes, export_parts
 
 asset, image, desc = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
-spec = asset / "mat" / "regions.json"
-if not spec.exists():
-    prepare(asset, image, spec, prompt=desc)
-orbit = render_orbit(asset, asset / "mat" / "orbit")
 # --gs SPLAT.ply: ENEAS on athenea renders of the splat and votes per gaussian (splat2mesh/gs_materials.py); the
 # texels then inherit the votes of their nearest gaussians. Masks are kept apart (other frames).
+# --splat-only (with --gs): no mesh at all. ASSET_DIR is just the output folder; the materials stay on the gaussians
+# and are finished there (splat2mesh/gs_finish.py: normals, floaters, albedo, glass tint)
 GS = Path(sys.argv[sys.argv.index("--gs") + 1]) if "--gs" in sys.argv else None
+SPLAT_ONLY = GS is not None and "--splat-only" in sys.argv
+spec = asset / "mat" / "regions.json"
+if not SPLAT_ONLY and not spec.exists():
+    prepare(asset, image, spec, prompt=desc)
+orbit = None if SPLAT_ONLY else render_orbit(asset, asset / "mat" / "orbit")
 MASKS = "masks_gs.npz" if GS else "masks.npz"
 # annotate on the orbit frame that looks most like the input image (the side the generator really saw)
 def obj_crop(path, bg_dark):
@@ -27,7 +30,7 @@ def obj_crop(path, bg_dark):
     a = a[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
     return np.asarray(Image.fromarray(a.astype(np.uint8)).resize((96, 96)), np.float32)
 ref = obj_crop(image, bg_dark=True)                                 # Idol input: object on black
-frames = sorted((orbit / "frames").glob("*.jpg"))
+frames = [] if SPLAT_ONLY else sorted((orbit / "frames").glob("*.jpg"))
 if GS:
     from splat2mesh.gs_materials import render_orbit_gs
     frames = render_orbit_gs(GS, asset / "mat" / "gs_orbit")
@@ -173,6 +176,16 @@ for c, t in auto_items:
 # the masks as decided here (after the drops) are what later steps (glass openings) must use, not the raw ones
 np.savez_compressed(asset / "mat" / ("masks_used_gs.npz" if GS else "masks_used.npz"), **{k.split("|", 1)[1]: v for k, v in masks.items()})
 print("annotation frame", ann, "| phrases", list(masks))
+if SPLAT_ONLY:
+    from splat2mesh.gs_materials import vote_gaussians, write_ply
+    from splat2mesh.gs_finish import finish
+    if not masks:              # ENEAS found nothing: every gaussian is the description's main material
+        main = max({c for c, _ in items}, key=[c for c, _ in items].count) if items else "glazed ceramic"
+        masks = {f"{main}|the object": np.stack([np.asarray(Image.open(f).convert("L")) < 250 for f in frames])}
+    votes_g, _ = vote_gaussians(GS, asset / "mat" / "gs_orbit", masks)
+    print("splat materials:", write_ply(GS, asset / "mat" / "splat_materials.ply", votes_g, list(masks)))
+    print("splat finish:", finish(asset / "mat" / "splat_materials.ply", asset / "mat" / "gs_orbit"))
+    sys.exit(0)
 if not masks:          # ENEAS found nothing: whole object = the description's main material
     import json as _j
     sp = _j.loads(spec.read_text())
