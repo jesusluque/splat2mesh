@@ -187,6 +187,18 @@ def add_albedo(asset_dir, ply_in, ply_out=None, y_down: bool = True) -> dict:
     w = 1.0 / np.maximum(d, 1e-6)
     srgb = (C[nn] * w[..., None]).sum(1) / w.sum(1, keepdims=True)
     lin = np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4).astype(np.float32)
+    # glass: the texture holds what Idol saw through it (the room, baked in); a one-colour glass takes its measured
+    # tint instead, per wall like the mesh (materials.GLASS_WALLS), stained glass keeps its colours
+    fin = asset / "mat" / "finish.json"; names_f = Path(ply_in).with_name("mat_names.json")
+    if fin.exists() and names_f.exists() and "mat_id" in v.dtype.names:
+        from .materials import GLASS_WALLS
+        cls = json.loads(fin.read_text()); cls = cls.get("classes", cls)
+        names = json.loads(names_f.read_text())["mat_id"]
+        mid = np.asarray(v["mat_id"]).astype(int)
+        for i, n in enumerate(names):
+            c = cls.get(n.split("|")[0], {})
+            if c.get("transmission", 0) > 0 and not c.get("patterned") and c.get("tint"):
+                lin[mid == i] = np.clip(np.asarray(c["tint"], np.float32), 0, 1) ** (1.0 / GLASS_WALLS)
     names = [n for n in v.dtype.names if n not in ("albedo_r", "albedo_g", "albedo_b")]
     out = np.empty(len(v), dtype=[(n, v.dtype[n]) for n in names] + [(c, "<f4") for c in ("albedo_r", "albedo_g", "albedo_b")])
     for n in names:
