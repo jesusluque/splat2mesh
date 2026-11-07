@@ -123,7 +123,7 @@ if "--no-overlap" not in sys.argv and len(masks) > 1:
         print("mask check:", _vans, flush=True)
         if _vsheet is not None:
             _vsheet.save(asset / "mat" / "mask_check.jpg", quality=85)
-        _res, _orep, _osheet = resolve(_listed, frames, _ai, image, _parts, _ask)
+        _res, _orep, _osheet = resolve(_listed, frames, _ai, image, _parts, _ask, verdicts=_vans)
         masks = {k: (_res[k] if k in _res else v) for k, v in masks.items()}
         print("overlap resolved:", _orep, flush=True)
         if _osheet is not None:
@@ -182,7 +182,10 @@ if SPLAT_ONLY:
     if not masks:              # ENEAS found nothing: every gaussian is the description's main material
         main = max({c for c, _ in items}, key=[c for c, _ in items].count) if items else "glazed ceramic"
         masks = {f"{main}|the object": np.stack([np.asarray(Image.open(f).convert("L")) < 250 for f in frames])}
+    from splat2mesh.gs_materials import refine_votes
     votes_g, _ = vote_gaussians(GS, asset / "mat" / "gs_orbit", masks)
+    _r = json.loads((asset / "mat" / "gs_orbit" / "cameras.json").read_text())["radius"]
+    votes_g = refine_votes(GS, votes_g, list(masks), _r)
     print("splat materials:", write_ply(GS, asset / "mat" / "splat_materials.ply", votes_g, list(masks)))
     print("splat finish:", finish(asset / "mat" / "splat_materials.ply", asset / "mat" / "gs_orbit"))
     sys.exit(0)

@@ -223,3 +223,51 @@ def add_albedo(asset_dir, ply_in, ply_out=None, y_down: bool = True) -> dict:
     out["albedo_r"], out["albedo_g"], out["albedo_b"] = lin.T
     write_vertex(ply_out or ply_in, out)
     return {"gaussians": len(v), "surface_distance_median": float(np.median(d[:, 0]))}
+
+
+SMOOTH_K = 16             # neighbours a gaussian's votes are averaged with (twice), as texel votes are by colour regions
+HOME_SHARE = 0.6          # a class keeps the fewest connected pieces that hold this share of its votes...
+HOME_MIN_PIECE = 0.25     # ...and any piece holding at least this share; elsewhere it is a segmenter's spill
+PIECE_VOXEL = 0.02        # × object radius: gaussians of one class this close are one piece
+
+
+def refine_votes(ply, votes: np.ndarray, names: list, radius: float, y_down: bool = True) -> np.ndarray:
+    """The spatial rules the mesh flow applies per texel (materials.refine_by_regions), on the gaussians: votes
+    smoothed over neighbours, then each class confined to its home pieces. A mask that spills onto a look-alike part
+    in a few views (a chainmail mask on the grey stone base) leaves a separate piece of that class with a small share
+    of its votes; those gaussians take their next class, or their neighbours'."""
+    from scipy import ndimage as ndi
+    _, xyz, alpha = _gaussians(ply, y_down)
+    p = votes / np.maximum(votes.sum(0, keepdims=True), 1e-9)
+    _, nn = cKDTree(xyz).query(xyz, k=SMOOTH_K)
+    for _ in range(2):
+        p = 0.5 * p + 0.5 * p[:, nn].mean(-1)
+    lab = p.argmax(0)
+    vox = PIECE_VOXEL * radius
+    banned = np.zeros(p.shape, bool)
+    for c in range(len(names)):
+        sel = np.nonzero(lab == c)[0]
+        if len(sel) < 50:
+            continue
+        key = np.floor((xyz[sel] - xyz[sel].min(0)) / vox).astype(int)
+        grid = np.zeros(key.max(0) + 1, bool); grid[tuple(key.T)] = True
+        comp, n = ndi.label(grid, structure=np.ones((3, 3, 3)))
+        g = comp[tuple(key.T)]
+        mass = np.bincount(g, weights=(p[c, sel] * alpha[sel]), minlength=n + 1)[1:]
+        share = mass / max(mass.sum(), 1e-12)
+        order = np.argsort(-share); cum = np.cumsum(share[order])
+        home = set((order[:int(np.searchsorted(cum, HOME_SHARE)) + 1] + 1).tolist()) | set((np.nonzero(share >= HOME_MIN_PIECE)[0] + 1).tolist())
+        out = ~np.isin(g, list(home))
+        banned[c, sel[out]] = True
+        if out.any():
+            print(f"home rule {names[c]}: {int(out.sum())} gaussians outside its {len(home)} home piece(s) of {n}", flush=True)
+    q = np.where(banned, 0.0, p)
+    none = q.sum(0) <= 1e-9
+    lab2 = q.argmax(0)
+    if none.any():                        # no other class voted: the neighbours' label
+        ok = ~none
+        _, nn2 = cKDTree(xyz[ok]).query(xyz[none], k=8)
+        lab2[none] = np.array([np.bincount(r, minlength=len(names)).argmax() for r in lab2[ok][nn2]])
+    out = np.zeros_like(votes)
+    out[lab2, np.arange(votes.shape[1])] = 1.0
+    return out

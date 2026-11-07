@@ -119,7 +119,7 @@ def verify(masks, frames, ann_index, photo, parts, ask):
     return out, ans, sheet
 
 
-def resolve(masks, frames, ann_index, photo, parts, ask=None):
+def resolve(masks, frames, ann_index, photo, parts, ask=None, verdicts=None):
     """masks: {key: [F, H, W] bool}; frames: orbit image paths; parts: {key: phrase}. Returns (masks, report)."""
     F, H, W = next(iter(masks.values())).shape
     keys = [k for k in masks if masks[k].any()]
@@ -164,9 +164,13 @@ def resolve(masks, frames, ann_index, photo, parts, ask=None):
     big = int(size.argmax())
     iou = lambda a, b: (a & b).sum() / max((a | b).sum(), 1)
     # swollen: ENEAS grounded the phrase on much of a bigger part too (IoU > SWOLLEN with a bigger mask)
-    swollen = [any(size[j] > size[i] and SWOLLEN < iou(masks[keys[i]], masks[keys[j]]) <= DUPLICATE
-                   for j in range(len(keys))) for i in range(len(keys))]
-    reliable = np.array([not swollen[i] and i != big for i in range(len(keys))])
+    # ...unless the mask check (verify) confirmed the smaller one and not the bigger: then the bigger one is the
+    # spill (a "shield rim" grounded on the whole stone base as well), and it is the one not trusted
+    ok = [str((verdicts or {}).get(k, "")).startswith("yes") for k in keys]
+    pair = lambda i, j: size[j] > size[i] and SWOLLEN < iou(masks[keys[i]], masks[keys[j]]) <= DUPLICATE
+    swollen = [any(pair(i, j) and not (ok[i] and not ok[j]) for j in range(len(keys))) for i in range(len(keys))]
+    spill = [any(pair(i, j) and ok[i] and not ok[j] for i in range(len(keys))) for j in range(len(keys))]
+    reliable = np.array([not swollen[i] and not spill[i] and i != big for i in range(len(keys))])
     moved = 0
     # pixels that only unreliable masks claim (one covering the whole figure, "the chainmail") also follow their
     # colour cluster's part, so a part ENEAS missed (the shield) is recovered from its colour
