@@ -33,6 +33,8 @@ from scipy.spatial import cKDTree
 from .ply import read_vertex, write_vertex
 
 FOCAL, APERTURE, SIZE = 50.0, 24.576, 1024
+RATIO_K = 32              # neighbours over which the texture-albedo / Idol-colour ratio is smoothed
+SH_C0 = 0.28209479177387814
 DEPTH_TOL = 0.015          # × object radius: a gaussian within this of the rendered depth is the visible surface
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -186,7 +188,22 @@ def add_albedo(asset_dir, ply_in, ply_out=None, y_down: bool = True) -> dict:
     d, nn = tree.query(xyz, k=4)
     w = 1.0 / np.maximum(d, 1e-6)
     srgb = (C[nn] * w[..., None]).sum(1) / w.sum(1, keepdims=True)
-    lin = np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4).astype(np.float32)
+    tex_lin = np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4).astype(np.float32)
+    # Idol's own colour per gaussian is clean and coherent; the texture's finished albedo has the light taken out but,
+    # looked up texel by texel, does not fit each gaussian (relit: pale needles). So each gaussian keeps its own
+    # colour times the albedo/colour ratio smoothed over its neighbours of the same material
+    dc = np.stack([v[f"f_dc_{i}"] for i in range(3)], 1).astype(np.float32)
+    own = np.clip(0.5 + SH_C0 * dc, 0, 1)
+    own = np.where(own <= 0.04045, own / 12.92, ((own + 0.055) / 1.055) ** 2.4).astype(np.float32)
+    lin = tex_lin.copy()
+    mid_all = np.asarray(v["mat_id"]).astype(int) if "mat_id" in v.dtype.names else np.zeros(len(v), int)
+    for m in np.unique(mid_all):
+        s = np.nonzero(mid_all == m)[0]
+        if len(s) < 50:
+            continue
+        _, kn = cKDTree(xyz[s]).query(xyz[s], k=min(RATIO_K, len(s)))
+        ratio = tex_lin[s][kn].mean(1) / np.maximum(own[s][kn].mean(1), 1e-3)
+        lin[s] = np.clip(own[s] * np.clip(ratio, 0.25, 4.0), 0, 1)
     # glass: the texture holds what Idol saw through it (the room, baked in); a one-colour glass takes its measured
     # tint instead, per wall like the mesh (materials.GLASS_WALLS), stained glass keeps its colours
     fin = asset / "mat" / "finish.json"; names_f = Path(ply_in).with_name("mat_names.json")
