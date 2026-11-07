@@ -91,6 +91,7 @@ if not reuse or run_items:
    job.reset()
    job.upload(frames, "frames")
    job.upload([ROOT / "scripts/eneas_seq.py"])
+   print(f"ENEAS phrases: {len(run_items)}", flush=True)
    print(job.run("eneas_seq.py", ["frames", "masks.npz"], [f"{ann},{ann2}"] + [t.replace("'", "") for _, t in run_items])
          .replace("\x00", "")[-1500:])
    if reuse:                 # merge the new phrases into the saved masks

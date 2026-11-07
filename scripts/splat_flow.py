@@ -65,11 +65,15 @@ def main():
 
     cmd = [sys.executable, str(ROOT / "scripts/materials_eneas3d.py"), str(out), str(src / "idol_input.png"), desc,
            "--gs", str(ply), "--splat-only"] + (["--reuse-masks"] if a.reuse_masks else [])
-    p = subprocess.run(cmd, capture_output=True, text=True)
-    (out / "materials.log").write_text(p.stdout + p.stderr)
-    if p.returncode:
-        sys.exit("materials failed, see " + str(out / "materials.log") + "\n" + p.stderr[-1500:])
-    log("materials:", [l for l in p.stdout.splitlines() if l.startswith(("splat materials", "splat finish"))])
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                         errors="replace", env={**__import__("os").environ, "PYTHONUNBUFFERED": "1"})
+    lines = []
+    with open(out / "materials.log", "w", encoding="utf-8") as f:
+        for line in p.stdout:                      # live: the app moves its progress bar on these lines
+            lines.append(line); f.write(line); f.flush(); print("  " + line.rstrip(), flush=True)
+    if p.wait():
+        sys.exit("materials failed, see " + str(out / "materials.log") + "\n" + "".join(lines)[-1500:])
+    log("materials:", [l for l in lines if l.startswith(("splat materials", "splat finish"))])
 
     from splat2mesh.athenea_splat import write_splat_usd
     log("USD:", write_splat_usd(out / "mat" / "splat_materials.ply", out / "splat.usdc", y_down=True))

@@ -126,14 +126,26 @@ def splat_materials(job, ply, cam, inp, out: Path, log: Path, prog) -> Path:
         cmd += ["--prompt", job["prompt"]]
     p = subprocess.Popen([str(c) for c in cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                          encoding="utf-8", errors="replace")
-    marks = {"parts:": (0.08, "parts listed"), "materials:": (0.9, "materials on the gaussians"),
-             "USD:": (1.0, "relightable splat written")}
+    # the stages of scripts/splat_flow.py and materials_eneas3d.py as they print them; ENEAS (the long part)
+    # moves the bar phrase by phrase
+    marks = [("parts:", 0.05, "parts listed"), ("annotation frame", 0.12, "orbit rendered with athenea"),
+             ("ENEAS phrases:", 0.13, "ENEAS: loading"), ("mask check:", 0.78, "masks checked (DeepSeek)"),
+             ("overlap resolved", 0.82, "overlaps resolved"), ("gaussians voted directly", 0.86, "votes per gaussian"),
+             ("normals:", 0.9, "normals and floaters from the depth renders"),
+             ("splat finish", 0.94, "albedo and glass finished"), ("USD:", 1.0, "relightable splat written")]
+    n_ph, done_ph = 0, 0
     with open(log, "a", encoding="utf-8") as f:
         for line in p.stdout:
             f.write(line); f.flush()
-            for k, (fr, msg) in marks.items():
+            for k, fr, msg in marks:
                 if k in line:
                     prog("materials", fr, msg)
+            if "ENEAS phrases:" in line:
+                n_ph = int(line.rsplit(":", 1)[1] or 0)
+            elif n_ph and (" -> (" in line or " ERROR " in line):
+                done_ph += 1
+                prog("materials", 0.13 + 0.65 * done_ph / n_ph,
+                     f"ENEAS {done_ph}/{n_ph}: {line.strip().lstrip('-').split(' -> ')[0].split(' ERROR ')[0][:60]}")
     if p.wait():
         raise RuntimeError("materials on the splat failed (see the log)")
     return d / "splat.usdc"

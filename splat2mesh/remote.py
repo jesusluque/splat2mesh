@@ -15,7 +15,17 @@ from pathlib import Path
 from .config import WINDOWS, cfg, venv_python
 
 
-def _run(cmd, **kw) -> str:
+def _run(cmd, stream: bool = False, **kw) -> str:
+    if stream:          # echo each line as it comes (callers show progress from it), and return them all
+        timeout = kw.pop("timeout", None)
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                             errors="replace", **kw)
+        out = []
+        for line in p.stdout:
+            out.append(line); print(line.rstrip(), flush=True)
+        if p.wait(timeout=timeout):
+            raise RuntimeError(f"{cmd[0]} failed ({p.returncode}):\n{''.join(out)[-2000:]}")
+        return "".join(out)
     r = subprocess.run(cmd, capture_output=True, text=True, **kw)
     if r.returncode != 0:
         raise RuntimeError(f"{cmd[0]} failed ({r.returncode}):\n{(r.stdout + r.stderr)[-2000:]}")
@@ -132,8 +142,8 @@ class Eneas:
         if self._native:
             py = cfg("eneas.python") or venv_python(Path(_x(self.dir)) / ".venv")
             j = Path(_x(self.job))
-            return _run([py, str(j / script_name), *[str(j / f) for f in files], *words], timeout=timeout,
-                        cwd=_x(self.dir))
+            return _run([py, "-u", str(j / script_name), *[str(j / f) for f in files], *words], timeout=timeout,
+                        cwd=_x(self.dir), stream=True)
         if self._local_wsl:
             return _run(["wsl", "-d", cfg("eneas.distro"), "--", "bash", "-lc", inner], timeout=timeout)
         if self.os == "wsl":
