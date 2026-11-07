@@ -5,7 +5,7 @@ tests/_assets/
 __pycache__/
 *.pyc
 .DS_Store
-third_party/
+third_party/*
+!third_party/athenea
 splat2mesh.toml
 .venv
-third_party

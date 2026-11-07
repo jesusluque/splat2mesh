@@ -1,0 +1,3 @@
+[submodule "third_party/athenea"]
+	path = third_party/athenea
+	url = https://github.com/jesusluque/athenea.git
