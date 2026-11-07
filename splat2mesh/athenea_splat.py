@@ -106,7 +106,8 @@ def _cover_opacity(ior, thin, sigma):
     return (cover / (2 * np.pi * sigma ** 2)).astype(np.float32)
 
 
-def implicit_glass_surfels(xyz, q, scl, op, sel_glass, ior, thin, clear_voxels: float = 2.0, raster: bool = False):
+def implicit_glass_surfels(xyz, q, scl, op, sel_glass, ior, thin, clear_voxels: float = 2.0, raster: bool = False,
+                           cell_voxels: float = 1.0):
     """Glass as surfels on the glass gaussians' own closed surface (implicit_glass_surface), no mesh: one surfel a
     grid cell, on the surface point nearest the cell's centre, flat along the field's normal, the cover of its kind.
     A solid stays closed where it meets opaque parts (a ray entering there would find no way out); a thin wall
@@ -123,7 +124,7 @@ def implicit_glass_surfels(xyz, q, scl, op, sel_glass, ior, thin, clear_voxels: 
         dop, _ = cKDTree(xyz[opq]).query(P)
         ok = ~tw | (dop > clear_voxels * vox)
         P, N, src, tw = P[ok], N[ok], src[ok], tw[ok]
-    cell = vox
+    cell = vox * cell_voxels           # > 1: fewer, wider surfels (a light transfer per surfel is heavy on the web)
     key = np.floor(P / cell).astype(np.int64)
     centre = (key + 0.5) * cell
     dist = np.linalg.norm(P - centre, axis=1)
@@ -208,7 +209,7 @@ def glass_surfels(asset_dir, xyz, q, scl, op, sel_glass, ior=None, thin=None, to
 
 
 def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False, glass_surface=None,
-                    raster_glass: bool = False) -> dict:
+                    raster_glass: bool = False, glass_cell: float = 1.0) -> dict:
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdVol, Vt
     v = read_vertex(ply)
     n = len(v)
@@ -278,7 +279,8 @@ def write_splat_usd(ply, out, y_down: bool = True, radiance: bool = False, glass
                 mid = np.asarray(v["mat_id"]).astype(int)
                 for i, nm in enumerate(names):
                     thin_g[mid == i] = bool(cls.get(nm.split("|")[0], {}).get("thin_walled", True))
-            P, Q, S, O, Nn, tw, add = implicit_glass_surfels(xyz, q, scl, op, trans > 0, ior, thin_g, raster=raster_glass)
+            P, Q, S, O, Nn, tw, add = implicit_glass_surfels(xyz, q, scl, op, trans > 0, ior, thin_g, raster=raster_glass,
+                                                                  cell_voxels=glass_cell)
             print(f"glass: {int((trans > 0).sum())} gaussians → {len(P)} surfels on their own surface", flush=True)
         src = np.concatenate([sel, add])
         xyz = np.concatenate([xyz[sel], P]).astype(np.float32)
@@ -341,8 +343,10 @@ def main():
                          "flat, covering, thinWalled) instead of Idol's haze")
     ap.add_argument("--raster-glass", action="store_true",
                     help="no mesh: solid glass at athenea's raster cover, for the browser (seen through; no transfer)")
+    ap.add_argument("--glass-cell", type=float, default=1.0,
+                    help="no mesh: glass surfel spacing in grid steps (2 = a quarter of the surfels, for the web)")
     a = ap.parse_args()
-    print(write_splat_usd(a.ply, a.out, a.y_down, a.radiance, a.glass_surface, a.raster_glass))
+    print(write_splat_usd(a.ply, a.out, a.y_down, a.radiance, a.glass_surface, a.raster_glass, a.glass_cell))
 
 
 if __name__ == "__main__":

@@ -54,8 +54,9 @@ def main():
 
     desc_f = out / "materials.txt"
     if not desc_f.exists():
-        from splat2mesh.describe import describe_ds, part_materials_from_prompt
-        desc = describe_ds(src / "idol_input.png", a.prompt)
+        from splat2mesh.describe import complete_parts, describe_ds, part_materials_from_prompt
+        # the list, then a coverage check: large visible parts it left out (hands, a cloak) are added
+        desc = complete_parts(describe_ds(src / "idol_input.png", a.prompt), src / "idol_input.png")
         if a.prompt:
             desc = part_materials_from_prompt(desc, a.prompt.lower())
         desc_f.write_text(desc)
