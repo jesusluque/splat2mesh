@@ -114,7 +114,7 @@
     const display = atheneaOutputPlugin({ view: params.get("view") ?? "agx", exposure: 0 });
     let host = null;
 
-    const state = { hdri: fullResHdri((h => (h && !/\.(hdr|exr)$/i.test(h) ? `${h}_4k.hdr` : h))(params.get("hdri")) ?? "brown_photostudio_02_4k.hdr"), rotation: 0, intensity: 1 };
+    const state = { hdri: fullResHdri((h => (/\.(hdr|exr)$/i.test(h) ? h : `${h}_4k.hdr`))(params.get("hdri") ?? "brown_photostudio_02_4k.hdr")), rotation: 0, intensity: 1 };
     const hdris = HDRIS_4K.includes(state.hdri) ? HDRIS_4K : [state.hdri, ...HDRIS_4K];
     async function setHdri(name) {
       state.hdri = name; status.textContent = `loading ${name}…`;
