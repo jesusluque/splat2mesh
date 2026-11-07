@@ -193,6 +193,7 @@ var
   P, Pct: Integer;
 begin
   T := Trim(S);
+  Log(CurComp + ': ' + T);                         { every line in Setup's /LOG, for diagnosis }
   if Copy(T, 1, 9) = 'PROGRESS ' then
   begin
     T := Copy(T, 10, Length(T));
