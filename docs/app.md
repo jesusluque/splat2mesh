@@ -34,6 +34,16 @@ invented detail as structure ([multiview.md](multiview.md)).
 
 <img src="img/app/2_input.png" width="100%">
 
+**Detail before Idol** (on by default for sentences and pictures). Idol works on a 1024 px picture, so an upscale
+gives it nothing: the extra pixels are resized away. The detail pass (`scripts/detail_pass.py`) puts sharper detail
+*inside the same pixels*: the whole picture goes through the Iris-3B restorer at 4× without being shrunk first and
+comes back to its own size, then each face (found by DeepSeek) gets a second pass. Eyes, lashes, hair strands,
+stitching, rivets and laces come out defined. Real-ESRGAN (BSD-3) and SwinIR-L (Apache-2.0) were tried as well
+(`scripts/sr_upscale.py`, through spandrel): they left faces smooth, and the Iris restorer is used. About four
+minutes; it needs Iris-3B installed locally (with its restorer, +12 GB).
+
+<img src="img/detail_pass.jpg" width="100%">
+
 **3. 3D** — Idol's seeds and the number of gaussians. With more than one seed, each sample is rendered from four
 sides with athenea and scored by DeepSeek against the picture, and the best is kept
 ([multiview.md](multiview.md)).

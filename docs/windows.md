@@ -41,10 +41,10 @@ The installer copies the code, then installs each component with its own progres
 | Step | What | Where |
 |---|---|---|
 | Core | uv, Python 3.12, splat2mesh's packages | `tools\uv`, `tools\python`, `.venv` |
-| athenea | the published Windows release (exe, DLLs, shaders), checksum verified | `tools\athenea` |
+| athenea | the published Windows release (exe, DLLs, shaders), checksum verified; NVIDIA's CUDA shader compiler (nvrtc) and headers from NVIDIA's redistributable wheels, since athenea compiles its shaders at run time and a clean Windows has no CUDA Toolkit | `tools\athenea`, `tools\cuda` |
 | Idol | the Idol SDK, PyTorch (CUDA 12.8), its weights, DINOv3, the VAE | `tools\idol-sdk`, Hugging Face cache |
 | ENEAS | ENEAS in its own environment (all its dependencies except `deepspeed`, which inference does not use); its weights (~9 GB) download on the first segmentation | `tools\eneas` |
-| Iris-3B | Iris-3B Turbo and Qwen3-VL-4B | `tools\iris-3b`, Hugging Face cache |
+| Iris-3B | Iris-3B Turbo, its restorer (the detail pass) and Qwen3-VL-4B; installed without its training-only dependencies (`dion`, which needs git) | `tools\iris-3b`, Hugging Face cache |
 
 Settings go to `%APPDATA%\splat2mesh\config.toml` (`python -m splat2mesh.config` prints what is resolved).
 
@@ -79,6 +79,18 @@ Start menu → **splat2mesh** (or `installer\splat2mesh.bat`). A local server op
 Results go to `work\jobs\<job>\out\`: `splat\splat.usdc` (relightable splat for athenea),
 `splat\mat\splat_materials.ply` (the splat with its materials per gaussian), `mesh\00\usd\asset.usda` (mesh with
 UVs, texture and materials), the turntables, and `results.json`.
+
+## Tested
+
+- On an RTX 3070 Laptop (8 GB, Windows 11): the installer, athenea, Idol (picture → splat → turntable in about four
+  minutes), ENEAS natively (its masks match the WSL ones: IoU 0.98–1.00 on all 16 views of the test object).
+- On a clean Windows Server 2022 with an NVIDIA L4 (24 GB), from the installer with no git, Python or CUDA Toolkit
+  installed beforehand: all components, Idol with four seeds, the app driven through its HTTP API.
+
+Problems found there and fixed: the output of a pipe in the ANSI code page (now UTF-8 everywhere), a job folder
+name with a drive letter's colon, athenea 0.3.0 without `stage --turntable` (renders one view a run), no ffmpeg
+(taken from `imageio-ffmpeg`), no nvrtc for athenea (NVIDIA's wheels), Iris's git-only training dependency, and the
+silent installer waiting on its own progress page.
 
 ## Limits on Windows
 
