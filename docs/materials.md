@@ -31,7 +31,11 @@ Entry points:
 ## 1. Description: which parts, which material
 
 `scripts/describe_materials.py` runs **Qwen3-VL-4B** (the text encoder of Iris-3B, already on disk) on the picture
-and the prompt. It writes one line per material, using the library's names, with the parts made of it:
+and the prompt. It writes one line per material, using the library's names, with the parts made of it. It is asked
+for 3–10 parts, starting with the ones that cover most of the object (body, clothing, skin, hair, large panels); on
+a painted figurine it names the material the paint represents (steel, wood, leather, skin), not the paint. Its
+answer is cleaned: a small model sometimes loops ("the shield rim, the shield edge, the shield rim…"), so repeated
+parts are dropped, every part starts with "the" and at most 10 are kept:
 
 ```
 glass: the bulb; brass: the screw base
@@ -75,7 +79,8 @@ sanity rules below handle overlaps.
 ## 4. Sanity rules (segmenter mistakes)
 
 - A secondary part covering more than **75 %** of the object is a mislocated phrase and is dropped. A thin part
-  (rim, edge, wire, band, cap, cork, chain…) is dropped above **15 %**.
+  (a phrase with the whole word rim, edge, wire, band, cap, cork, chain…; "chainmail" is not a chain) is dropped
+  above **15 %**.
 - Two phrases of different materials with nearly identical masks (IoU > 0.9) were not separated by ENEAS. The one
   listed first is kept.
 - A dropped part keeps its material class, so the colour priors (6) can still claim texels for it.
@@ -96,7 +101,7 @@ that sees it.
 
 ## 6. The library
 
-`splat2mesh/material_library.json` has **58 materials** with metallic, roughness and its plausible range, IOR, metal
+`splat2mesh/material_library.json` has **60 materials** with metallic, roughness and its plausible range, IOR, metal
 F0 colour, transmission, subsurface, thin-walled and match keywords. Values are catalogue values, not measurements.
 
 | Family | Entries |
@@ -110,6 +115,7 @@ F0 colour, transmission, subsurface, thin-walled and match keywords. Values are 
 | Transparent | glass, frosted glass, crystal, quartz / gemstone, diamond, amber / resin |
 | Stone and translucent | polished marble, honed stone, jade, concrete / plaster, mother-of-pearl, bone / ivory, wax / candle |
 | Leather and textiles | leather, patent leather, cotton / linen, silk / satin, velvet / felt, paper / cardboard |
+| Characters | skin (subsurface 0.5), hair / fur |
 
 ## 7. Finish pass
 

@@ -71,7 +71,7 @@ or a short description). For each object:
    then by colour clusters that a vision model names.
 4. **Sanity rules and colour regions** catch the segmenter's mistakes: borders follow colour edges, a part that
    covers most of the object is dropped, and colour priors recover kintsugi lines, gilt rims, chrome and rubber.
-5. **The library** (58 materials) gives roughness, metallic, IOR, metal F0, transmission and subsurface.
+5. **The library** (60 materials) gives roughness, metallic, IOR, metal F0, transmission and subsurface.
 6. **A finish pass** makes glossy pieces look finished rather than scanned. Polished metals take their physical
    colour plus the fine detail of the texture, highlights are removed from glossy paint and porcelain, shading
    normals are smoothed with edges kept, the invented side is brightened to match the seen side, and glass gets

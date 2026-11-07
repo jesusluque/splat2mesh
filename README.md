@@ -23,7 +23,7 @@ picture ──Idol──▶ 3D Gaussian splat ──splat2mesh──▶ closed m
 | Splat → mesh, **direct mode** | the splat's opacity field on a 448³ grid → solid → marching cubes → topology-preserving decimation | one watertight shell, 80 000 faces, ~1 min |
 | Splat → mesh, **render path** | 87 rendered RGB-D views → TSDF fusion + visual hull | for splats that direct mode crumples; ~10 min |
 | UVs + texture | xatlas, then colour baked from the gaussians (or the views) into a 4096² atlas | ~100–250 charts |
-| Materials | parts named by Qwen3-VL, tracked on 16 views by [ENEAS](https://github.com/speridlabs/eneas), voted per texel, values from a 58-entry PBR library | roughness, metallic, transmission, subsurface maps |
+| Materials | parts named by Qwen3-VL, tracked on 16 views by [ENEAS](https://github.com/speridlabs/eneas), voted per texel, values from a 60-entry PBR library | roughness, metallic, transmission, subsurface maps |
 | Output | USD with `UsdPreviewSurface` + MaterialX `standard_surface`; per-part and per-material variants | QA report: open and non-manifold edges, folds; PSNR vs the splat on the render path |
 
 ## Quick start

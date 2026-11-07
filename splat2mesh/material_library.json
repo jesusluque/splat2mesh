@@ -1,5 +1,5 @@
 {
- "about": "PBR presets for splat2mesh. metallic/roughness for UsdPreviewSurface (metallic-roughness workflow); ior for dielectrics; f0 = linear reflectance at normal incidence used as base colour for metals (values from widely used physically-based reference charts, e.g. Lagarde's and Hoffman's). roughness is a typical value for the finish named; 'range' gives the plausible span. These are catalogue values, not measurements. transmission/subsurface/thin_walled feed a MaterialX standard_surface (translucent and glass parts); UsdPreviewSurface gets opacity\u22481-0.9\u00b7transmission. Roughness values were raised (2026-11-03) from showroom-polished to used-object values after the web looked too glossy.",
+ "about": "PBR presets for splat2mesh. metallic/roughness for UsdPreviewSurface (metallic-roughness workflow); ior for dielectrics; f0 = linear reflectance at normal incidence used as base colour for metals (values from widely used physically-based reference charts, e.g. Lagarde's and Hoffman's). roughness is a typical value for the finish named; 'range' gives the plausible span. These are catalogue values, not measurements. transmission/subsurface/thin_walled feed a MaterialX standard_surface (translucent and glass parts); UsdPreviewSurface gets opacity≈1-0.9·transmission. Roughness values were raised (2026-11-03) from showroom-polished to used-object values after the web looked too glossy.",
  "materials": {
   "gold": {
    "class": "metal",
@@ -564,7 +564,7 @@
     "enamel",
     "enamelled",
     "cloisonne",
-    "cloisonn\u00e9"
+    "cloisonné"
    ],
    "transmission": 0.0,
    "subsurface": 0.0,
@@ -1165,6 +1165,46 @@
    "transmission": 0.0,
    "subsurface": 0.0,
    "thin_walled": true
+  },
+  "skin": {
+   "class": "organic",
+   "metallic": 0,
+   "roughness": 0.5,
+   "range": [
+    0.35,
+    0.65
+   ],
+   "ior": 1.4,
+   "f0": null,
+   "keywords": [
+    "skin",
+    "flesh"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.5,
+   "thin_walled": false
+  },
+  "hair / fur": {
+   "class": "organic",
+   "metallic": 0,
+   "roughness": 0.6,
+   "range": [
+    0.4,
+    0.8
+   ],
+   "ior": 1.55,
+   "f0": null,
+   "keywords": [
+    "hair",
+    "beard",
+    "fur",
+    "moustache",
+    "mustache",
+    "braid"
+   ],
+   "transmission": 0.0,
+   "subsurface": 0.0,
+   "thin_walled": false
   }
  }
 }

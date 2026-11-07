@@ -3,7 +3,7 @@ mesh (tracked across views) → masks back-projected to texels and voted → rou
 
     python scripts/materials_eneas3d.py ASSET_DIR INPUT_IMAGE "gold: the gold coin, the gold bell; porcelain: the body"
 """
-import json, os, subprocess, sys
+import json, os, re, subprocess, sys
 from pathlib import Path
 import numpy as np
 from PIL import Image
@@ -121,8 +121,9 @@ for k in list(masks):
     if k == first:
         continue
     cover = (masks[k] & obj).sum() / max(obj.sum(), 1)
-    thin = any(w in k.split("|", 1)[1] for w in ("rim", "edge", "line", "wire", "trim", "hinge", "knob", "filament",
-                                                  "band", "stripe", "cap", "cork", "wick", "chain", "eyelet"))
+    words = set(re.findall(r"[a-z]+", k.split("|", 1)[1].lower()))     # whole words: "chainmail" is not a chain
+    thin = bool(words & {"rim", "edge", "line", "wire", "trim", "hinge", "knob", "filament",
+                         "band", "stripe", "cap", "cork", "wick", "chain", "eyelet"})
     if cover > (0.15 if thin else 0.75):
         print("dropped (covers", round(float(cover), 2), "of the object):", k)
         masks[k] = np.zeros_like(masks[k])      # keep the material in the list so colour priors can still claim it
