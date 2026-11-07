@@ -123,7 +123,18 @@ live in the browser by athenea's code in Spark WebGPU ([web/README.md](web/READM
 
 <img src="docs/img/dwarf/8_relit_splat.jpg" width="100%">
 
-Live: <https://splat2mesh.lucab.co.uk> (first card; WebGPU browser).
+Glass and crystal work on the splat too. The crystal dragon below is a splat only: its body, gold and stone carry
+their materials per gaussian, and its crystal is solid glass with IOR 1.55 on the splat's surface, which refracts
+what is behind it (athenea raster on the left, path traced on the right):
+
+<img src="docs/img/dragon_splat_raster_vs_rt.jpg" width="100%">
+
+```sh
+.venv/bin/python scripts/flow_batch.py src out prompts.txt --gs
+.venv/bin/python -m splat2mesh.athenea_splat out/00/usd/mat/splat_materials.ply dragon.usdc --y-down --glass-surface out/00/usd
+```
+
+Live: <https://splat2mesh.lucab.co.uk> (the first cards; a WebGPU browser).
 
 The video for posting is put together from the same shots with `scripts/make_video.py`.
 

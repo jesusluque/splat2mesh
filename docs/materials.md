@@ -208,7 +208,29 @@ In the asset's `usd/` folder:
 | `parts.json`, `material_groups.json` | the part and material list, with glass tints |
 | `mat/` | intermediate data: orbit frames, masks (`masks.npz`, `masks_used.npz`), texel classes, sheets |
 
-## 10. Web gallery
+## 10. Relightable splats and glass on the splat
+
+`python -m splat2mesh.athenea_splat SPLAT_MATERIALS.ply OUT.usdc --y-down --glass-surface ASSET_DIR` writes the splat
+for athenea (particle field + `primvars:athenea:splat:*`). With `--glass-surface` (the mesh asset made from the same
+splat) it is relit correctly:
+
+- **Normals**: every gaussian takes the mesh's shading normal at its nearest surface point. Idol's gaussians are
+  nearly round, so without it each reflects in a random direction (stray glints).
+- **Loose gaussians** more than 2 voxels in front of the surface are dropped (they catch the light as specks).
+- **Glass**: Idol leaves glass as a haze (on a bulb, 490 000 gaussians at about 1 % opacity through a shell 6 cm
+  thick), which a refracting renderer shows as smoke. The glass gaussians on the surface become surfels instead:
+  one per surface cell (1.5 voxels), placed on the surface, flat along the normal, σ = 0.75 × spacing, none within
+  2 voxels of an opaque part. Their summed cover is athenea's target: for a thin wall (`thinWalled = 1`, a bulb)
+  2·R0/(1+R0) with R0 from the ior (0.077 at 1.5); for solid glass (a crystal, `thinWalled = 0`) 0.12. The peak
+  opacity is that cover × h²/(2πσ²), so overlapping discs add up evenly.
+- **Albedo**: Idol's colour is radiance with the light baked in; relighting uses the finished base colour of the
+  mesh projected to each gaussian, and a one-colour glass its measured tint per crossing (√tint).
+- One prim per ior among the transmitting gaussians (athenea's ior is per prim); Y-down is turned in the data.
+
+For the browser, `usd-athc` (from sparkwebgpu) converts each prim to `.athc`; `web/splat.html` loads them (several
+clouds, each with its ior) and relights them live with athenea's code in Spark WebGPU (`web/README.md`).
+
+## 11. Web gallery
 
 `scripts/export_web.py OUTDIR NAME=ASSET_DIR[:TITLE[:SOURCE[:POSTER]]] …` builds a static gallery that uses USD
 only:
