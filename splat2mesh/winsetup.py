@@ -106,11 +106,26 @@ def uv() -> str:
     return str(own)
 
 
-def git_clone(url: str, dst: Path, comp: str):
-    if (dst / ".git").exists():
-        run(["git", "-C", dst, "pull", "--ff-only"], comp, check=False)
+def get_repo(url: str, dst: Path, comp: str, lo: float = 0, hi: float = 5):
+    """A GitHub repository's main branch: git when available and already a checkout, else its zip (no git
+    needed on a clean Windows)."""
+    if (dst / ".git").exists() and shutil.which("git"):
+        run(["git", "-C", dst, "pull", "--ff-only"], comp, check=False); return
+    if (dst / "pyproject.toml").exists():
+        progress(hi, comp, f"{dst.name} already here"); return
+    z = download(url.removesuffix(".git") + "/archive/refs/heads/main.zip", TOOLS / "downloads" / f"{dst.name}.zip",
+                 comp, lo, hi)
+    tmp = dst.with_name(dst.name + ".unpack"); shutil.rmtree(tmp, ignore_errors=True)
+    zipfile.ZipFile(z).extractall(tmp)
+    inner = next(tmp.iterdir())                       # <repo>-main/
+    if dst.exists():
+        for item in inner.iterdir():                  # keep an existing .venv / weights
+            t = dst / item.name
+            shutil.rmtree(t, ignore_errors=True) if t.is_dir() else t.unlink(missing_ok=True)
+            shutil.move(str(item), str(t))
     else:
-        run(["git", "clone", "--depth", "1", url, dst], comp)
+        shutil.move(str(inner), str(dst))
+    shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ------------------------------------------------------------------------------------------------- status
@@ -184,7 +199,7 @@ def install_idol(vae: str = "klein"):
     c = "idol"
     d = TOOLS / "idol-sdk"
     progress(2, c, "getting the Idol SDK")
-    git_clone(IDOL_GIT, d, c)
+    get_repo(IDOL_GIT, d, c, 2, 7)
     progress(8, c, "Python 3.12 environment")
     run([uv(), "venv", "--python", "3.12", d / ".venv"], c, check=False)
     py = venv_python(d / ".venv")
@@ -221,7 +236,7 @@ ENEAS_DEPS = [   # ENEAS's dependencies on native Windows: all but deepspeed (tr
     "transformers>=4.53.0,<4.54.0", "numpy>=1.24.0,<2.0.0", "opencv-python>=4.8.0", "pillow>=9.0.0", "tqdm>=4.65.0",
     "hydra-core>=1.3.0,<2.0.0", "iopath>=0.1.10", "timm>=0.9.0,<2.0.0", "einops>=0.6.0", "accelerate>=0.20.0",
     "peft>=0.5.0", "typer>=0.9.0", "click>=8.1.0", "spacy==3.8.11", "thinc==8.3.10", "inflect>=6.0.0",
-    "sentencepiece>=0.2.0", "protobuf>=3.20.0", "sam2", "ollama", "pydantic", "decord",
+    "sentencepiece>=0.2.0", "protobuf>=3.20.0", "sam2", "ollama", "pydantic", "decord", "huggingface_hub[hf_xet]",
     "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/"
     "en_core_web_sm-3.8.0-py3-none-any.whl",
 ]
@@ -232,7 +247,7 @@ def install_eneas():
     c = "eneas"
     d = TOOLS / "eneas"
     progress(2, c, "getting ENEAS")
-    git_clone(ENEAS_GIT, d, c)
+    get_repo(ENEAS_GIT, d, c, 2, 5)
     progress(6, c, "Python 3.12 environment")
     run([uv(), "venv", "--python", "3.12", d / ".venv"], c, check=False)
     py = venv_python(d / ".venv")
@@ -257,7 +272,7 @@ def install_iris(mode: str = "cpu-encoder"):
         progress(100, c, "using the online Iris-3B Turbo Space (nothing to download)"); return
     d = TOOLS / "iris-3b"
     progress(2, c, "getting Iris-3B")
-    git_clone(IRIS_GIT, d, c)
+    get_repo(IRIS_GIT, d, c, 2, 8)
     run([uv(), "venv", "--python", "3.12", d / ".venv"], c, check=False)
     py = venv_python(d / ".venv")
     progress(10, c, "PyTorch with CUDA 12.8")
@@ -283,14 +298,19 @@ def main():
     i = sp.add_parser("install"); i.add_argument("components", nargs="+", choices=COMPONENTS + ("all",))
     i.add_argument("--vae", default="klein", choices=list(VAE))
     i.add_argument("--iris-mode", default="cpu-encoder", choices=["cpu-encoder", "gpu", "space"])
+    i.add_argument("--hf-token-file", help="a file with a Hugging Face token: read, deleted, used for the downloads")
     o = sp.add_parser("options")
     o.add_argument("--deepseek-key-env", help="name of an environment variable holding the DeepSeek key")
     o.add_argument("--iris-mode", choices=["cpu-encoder", "gpu", "space"])
+    o.add_argument("--deepseek-key-file", help="a file with the DeepSeek key (read and deleted)")
     a = ap.parse_args()
     if a.cmd == "status":
         print(json.dumps(status(), indent=1)); return
     if a.cmd == "options":
         up = {}
+        if a.deepseek_key_file and Path(a.deepseek_key_file).exists():
+            os.environ["_S2M_DS"] = Path(a.deepseek_key_file).read_text().strip()
+            Path(a.deepseek_key_file).unlink(); a.deepseek_key_env = "_S2M_DS"
         if a.deepseek_key_env and os.environ.get(a.deepseek_key_env):
             # the user's own key, in the user's own config folder (the DeepSeek checks need it at run time)
             f = USER_CONFIG.parent / "deepseek.env"; f.parent.mkdir(parents=True, exist_ok=True)
@@ -301,6 +321,10 @@ def main():
         if up:
             write_user_config(up)
         print("options saved"); return
+    if a.hf_token_file and Path(a.hf_token_file).exists():        # this process and its children only
+        tok = Path(a.hf_token_file).read_text().strip(); Path(a.hf_token_file).unlink()
+        if tok:
+            os.environ["HF_TOKEN"] = tok
     comps = COMPONENTS if "all" in a.components else a.components
     failed = []
     for comp in comps:
