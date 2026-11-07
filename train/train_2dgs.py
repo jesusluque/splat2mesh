@@ -12,6 +12,7 @@ views/vNNN.png, views/vNNN_mask.png. Optional init.ply (xyz[, rgb]) for initial 
 from __future__ import annotations
 
 import argparse
+import sys
 import json
 import math
 import time
@@ -61,8 +62,9 @@ def ssim(a, b):
 def init_points(root: Path, w2cs, K, masks, n: int, device):
     p = root / "init.ply"
     if p.exists():
-        from plyfile import PlyData
-        v = PlyData.read(str(p))["vertex"]
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from splat2mesh.ply import read_vertex
+        v = read_vertex(p)
         xyz = np.stack([v["x"], v["y"], v["z"]], 1).astype(np.float32)
         if len(xyz) > n:
             xyz = xyz[np.random.default_rng(0).choice(len(xyz), n, replace=False)]

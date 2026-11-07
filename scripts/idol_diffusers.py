@@ -10,7 +10,6 @@ import numpy as np
 import torch
 from diffusers import ModularPipeline
 from diffusers.utils import load_image
-from plyfile import PlyData, PlyElement
 
 
 def main():
@@ -44,7 +43,10 @@ def main():
     v = np.empty(attrs.shape[0], dtype=[(n, "f4") for n in names])
     for i, n in enumerate(names):
         v[n] = attrs[:, i]
-    PlyData([PlyElement.describe(v, "vertex")]).write(a.out)
+    with open(a.out, "wb") as f:                                   # binary PLY, no extra dependency
+        f.write(("ply\nformat binary_little_endian 1.0\nelement vertex %d\n" % len(v)
+                 + "".join(f"property float {n}\n" for n in names) + "end_header\n").encode())
+        f.write(v.astype([(n, "<f4") for n in names]).tobytes())
     torch.save(res["camera_latents"], a.out.rsplit(".", 1)[0] + "_camera.pt")
     print(json.dumps({"gaussians": int(attrs.shape[0]), "seconds": round(time.time() - t0, 1),
                       "peak_vram_gb": round(torch.cuda.max_memory_allocated() / 2**30, 2)}), flush=True)

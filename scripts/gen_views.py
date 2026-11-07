@@ -23,6 +23,7 @@ from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path.home() / ".claude/skills/research-deepseek/scripts"))
 SHARED = Path.home() / "luc/athenea-gpu/shared.sh"
 IRIS_PY = ROOT / "third_party/iris-3b/.venv/bin/python"
@@ -75,8 +76,8 @@ def same_object(photo, cand, side):
 
 def cameras(ply, cam_json, out):
     """athenea cameras (USD frame, splat turned X 180 like the pipeline) on Idol's camera turned in yaw."""
-    from plyfile import PlyData
-    v = PlyData.read(ply)["vertex"]
+    from splat2mesh.ply import read_vertex
+    v = read_vertex(ply)
     xyz = np.stack([v["x"], v["y"], v["z"]], 1) * np.array([1, -1, -1])
     op = 1 / (1 + np.exp(-np.asarray(v["opacity"])))
     p = xyz[op > 0.05]; lo, hi = np.percentile(p, 0.5, 0), np.percentile(p, 99.5, 0)

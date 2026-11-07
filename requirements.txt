@@ -10,6 +10,5 @@ manifold3d
 scikit-image
 usd-core
 pillow
-plyfile
 OpenEXR
 gradio_client

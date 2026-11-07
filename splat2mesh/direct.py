@@ -16,14 +16,14 @@ from pathlib import Path
 import numpy as np
 import open3d as o3d
 import trimesh
-from plyfile import PlyData
+from .ply import read_vertex
 from scipy.spatial import cKDTree
 
 SH_C0 = 0.28209479177387814
 
 
 def load_gaussians(path, y_down: bool = False, min_opacity: float = 0.02):
-    v = PlyData.read(str(path))["vertex"]
+    v = read_vertex(path)
     xyz = np.stack([v["x"], v["y"], v["z"]], 1).astype(np.float64)
     scale = np.exp(np.stack([v[f"scale_{i}"] for i in range(3)], 1)).astype(np.float64)
     q = np.stack([v[f"rot_{i}"] for i in range(4)], 1).astype(np.float64)

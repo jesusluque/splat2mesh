@@ -6,12 +6,14 @@ Rings: -30 (12), 0 (24), 25 (24), 50 (18), 75 (8) degrees + zenith = 87 views (~
 import argparse, json, math
 from pathlib import Path
 import numpy as np
-from plyfile import PlyData
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from splat2mesh.ply import read_vertex
 
 ap = argparse.ArgumentParser(); ap.add_argument("ply"); ap.add_argument("out"); ap.add_argument("--up", default="y", choices=["y", "z"])
 ap.add_argument("--rotate-x-180", action="store_true", help="cloud is Y-down (COLMAP/Idol); pair with athenea --rotate-x 180")
 a = ap.parse_args()
-v = PlyData.read(a.ply)["vertex"]
+v = read_vertex(a.ply)
 xyz = np.stack([v["x"], v["y"], v["z"]], 1)
 if a.rotate_x_180:
     xyz = xyz * np.array([1, -1, -1])
