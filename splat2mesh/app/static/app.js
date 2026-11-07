@@ -161,7 +161,7 @@ function results(j, card) {
   const f = j.results.files || {};
   const media = [];
   if (f.input) media.push(`<img src="${fileUrl(f.input)}" title="input">`);
-  for (const k of ["splat_turntable", "mesh_turntable"]) if (f[k]) media.push(`<video src="${fileUrl(f[k])}" controls loop muted autoplay playsinline title="${k}"></video>`);
+  for (const k of ["splat_turntable", "mesh_turntable"]) if (f[k]) media.push(`<video src="${fileUrl(f[k])}" poster="${fileUrl(f[k].replace(/\.mp4$/, "_frames/f_0000.png"))}" controls loop muted autoplay playsinline title="${k}"></video>`);
   $(".results", card).innerHTML = media.join("");
   const names = { splat_usd: "relightable splat (USD)", mesh_usd: "mesh (USD)", splat_ply: "Idol splat (.ply)", splat_materials: "splat + materials (.ply)" };
   $(".files", card).innerHTML = Object.entries(names).filter(([k]) => f[k]).map(([k, n]) =>
@@ -210,4 +210,13 @@ $("#save_settings").onclick = async () => {
   $("#deepseek_key").value = ""; $("#saved").textContent = "saved"; refreshStatus();
 };
 
-renderSteps(); refreshStatus().then(() => { if (location.hash) show(location.hash.slice(1)); }); refreshJobs();
+// deep links: ?source=prompt|image|splat|batch&step=input&prompt=...&seeds=4&mesh=1&technique=rt (#jobs etc. for pages)
+const q = new URLSearchParams(location.search);
+if (q.get("source")) { const r = $(`input[name=source][value=${q.get("source")}]`); if (r) r.checked = true; }
+if (q.get("prompt")) $("#prompt").value = q.get("prompt");
+if (q.get("seeds")) { $("#seeds").value = q.get("seeds"); $("#seeds_v").value = q.get("seeds"); }
+if (q.get("mesh")) $("#out_mesh").checked = q.get("mesh") === "1";
+if (q.get("technique")) $("#technique").value = q.get("technique");
+if (q.get("name")) $("#jobname").value = q.get("name");
+if (q.get("step")) step = Math.max(0, visibleSteps().findIndex(([id]) => id === q.get("step")));
+renderSteps(); refreshStatus().then(() => { if (location.hash) show(location.hash.slice(1)); renderSteps(); }); refreshJobs();

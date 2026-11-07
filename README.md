@@ -194,6 +194,7 @@ also writes `compare.png`, splat beside mesh, and a re-render PSNR).
 | [Multi-view and seed selection](docs/multiview.md) | more than one view of the object; choosing the best Idol sample with a vision validator |
 | [Setup](docs/setup.md) | dependencies, GPU hosts, environment variables |
 | [Windows](docs/windows.md) | the installer, the app, GPU requirements, everything on one PC |
+| [The app](docs/app.md) | the wizard, the job queue, components and settings, with screenshots |
 | [Scripts](docs/scripts.md) | what every script does, grouped by purpose |
 | [Findings](docs/findings.md) | what was tried, measured, kept and dropped, with numbers |
 | [Licences](docs/licenses.md) | licences of the code, the dependencies and the models |

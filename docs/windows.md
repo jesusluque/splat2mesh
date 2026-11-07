@@ -54,6 +54,10 @@ Unattended, or to repair: `installer\install_all.bat [klein|dev] [cpu-encoder|gp
 
 ## The app
 
+Full guide with screenshots: [app.md](app.md).
+
+<img src="img/app/1_start.png" width="100%">
+
 Start menu → **splat2mesh** (or `installer\splat2mesh.bat`). A local server opens in its own window
 (`http://127.0.0.1:8765`).
 
