@@ -142,7 +142,7 @@ class Eneas:
         """Run a script already uploaded to the job folder, inside the ENEAS environment (uv). files: paths inside
         the job folder (not quoted, so ~ expands); words: quoted arguments (phrases)."""
         q = " ".join([f"{self.inside}/{f}" for f in files] + [shlex.quote(w) for w in words])
-        inner = f"cd {self.dir} && ~/.local/bin/uv run python {self.inside}/{script_name} {q}"
+        inner = f"cd {self.dir} && ~/.local/bin/uv run --no-sync python {self.inside}/{script_name} {q}"   # no network: the env is installed
         if self._native:
             py = cfg("eneas.python") or venv_python(Path(_x(self.dir)) / ".venv")
             j = Path(_x(self.job))

@@ -81,9 +81,9 @@ def _gpu_lock(path=Path.home() / ".cache/splat2mesh_eneas.lock"):
         try:
             path.mkdir(); owner.write_text(str(os.getpid())); break
         except FileExistsError:
-            try:            # stale: its owner is gone (a cancelled job), or it is over an hour old
-                pid = int(owner.read_text() or 0) if owner.exists() else -1
-                stale = _time.time() - path.stat().st_mtime > 3600 or (pid > 0 and not _alive(pid)) \
+            try:            # stale: its owner is gone (a cancelled job). Age alone is no sign: an ENEAS run on an
+                pid = int(owner.read_text() or 0) if owner.exists() else -1     # 8 GB card can take over an hour
+                stale = (pid > 0 and not _alive(pid)) \
                     or (pid == -1 and _time.time() - path.stat().st_mtime > 60)
             except (OSError, ValueError):
                 stale = False

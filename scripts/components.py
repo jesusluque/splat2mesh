@@ -46,7 +46,7 @@ def eneas_on_reference(ref: Path, phrases, out_npz: Path):
     subprocess.run(["scp", "-q", str(fr / "frame_0000.jpg"), f"{HOST}:{win}/frames/"], check=True)
     subprocess.run(["scp", "-q", str(ROOT / "scripts/eneas_seq.py"), f"{HOST}:{win}/"], check=True)
     q = " ".join("'" + p.replace("'", "") + "'" for p in phrases)
-    inner = f"~/.local/bin/uv run python {wsl}/eneas_seq.py {wsl}/frames {wsl}/masks.npz frame_0000.jpg {q}"
+    inner = f"~/.local/bin/uv run --no-sync python {wsl}/eneas_seq.py {wsl}/frames {wsl}/masks.npz frame_0000.jpg {q}"
     print(subprocess.run(["ssh", HOST, f'wsl -d Ubuntu-24.04 -- bash -lc "cd ~/splat2mesh/eneas && {inner}"'],
                          capture_output=True, text=True, timeout=3600).stdout.replace("\x00", "")[-800:])
     subprocess.run(["scp", "-q", f"{HOST}:{win}/masks.npz", str(out_npz)], check=True)
