@@ -52,6 +52,21 @@ GLASS_PATTERN_SPREAD = 12.0   # Lab a*b* median distance; above it the glass is 
 INK_MAX_WIDTH = 4             # texels (half-width) of a dark stroke still read as ink rather than a reflection
 METAL_DETAIL_SIGMA = 8.0      # texels: metal albedo keeps luminance detail finer than this (hammering, engraving)
 METAL_DETAIL_MIN = 0.75       # ...and may darken by at most this factor (deeper darks are reflections)
+DARK_METAL_LUM = 0.08        # a metal part whose median linear luminance is below this and whose median colour
+DARK_METAL_CHROMA = 10.0     # is greyer than this is blackened or painted metal (a black iron cap: median 0.037),
+                             # not a reflection (a brass frame's dark reflections keep its hue: chroma 25)
+
+
+def metal_f0(f0, lin_px: np.ndarray, lab_px: np.ndarray) -> np.ndarray:
+    """The F0 to use for a metal part: the library's, or, for a dark colourless part (blackened iron, black paint
+    on metal), the library's hue scaled to the part's own median luminance. lin_px: linear RGB [n, 3]; lab_px: Lab."""
+    f0 = np.asarray(f0, np.float64)
+    if not len(lin_px):
+        return f0
+    lum = float(np.median(lin_px.mean(1))); chroma = float(np.hypot(*np.median(lab_px[:, 1:], 0)))
+    if lum < DARK_METAL_LUM and chroma < DARK_METAL_CHROMA:
+        return f0 * max(lum, 0.02) / f0.mean()
+    return f0
 GLASS_SMOOTH_ITERS = 120      # Taubin iterations on glass/crystal/jade/wax vertices
 GLASS_WALL_MIN = 0.08         # glass thicker than this × object size is really a hollow wall (bulb, bowl, bottle)
 GLOSS_EVIDENCE_MAX_ROUGH = 0.45  # materials whose range reaches this low may be polished; the texture decides
@@ -1011,9 +1026,9 @@ def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
             if hp_cache.get("hp") is None:
                 lum_all = np.log(lin(base).mean(-1) + 1e-3)
                 hp_cache["hp"] = lum_all - ndi.gaussian_filter(lum_all, METAL_DETAIL_SIGMA)
-            f0 = np.array(L["f0"], np.float32)
+            f0 = metal_f0(L["f0"], lin(base[sel]), _srgb_to_lab(base[sel])).astype(np.float32)
             detail = np.exp(0.9 * hp_cache["hp"][sel])
-            detail = np.clip(detail, METAL_DETAIL_MIN, 1.0 / f0.max())
+            detail = np.clip(detail, METAL_DETAIL_MIN, min(1.0 / f0.max(), 2.0))
             base[sel] = srgb(f0[None] * detail[:, None])
         glossy_ev = False
         if (L.get("metallic", 0) < 0.5 and L.get("transmission", 0) <= 0 and L.get("roughness", 0.5) > 0.4

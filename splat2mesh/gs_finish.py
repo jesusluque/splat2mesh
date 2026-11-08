@@ -136,8 +136,9 @@ def finish(ply, orbit_dir, y_down: bool = True) -> dict:
             # frozen reflections. Dark colourless specks are ink or enamel, not metal
             lum = np.log(_lin(srgb[s]).mean(1) + 1e-3)
             hp = lum - lum[kn].mean(1)
-            f0 = np.asarray(L["f0"], np.float64)
-            detail = np.clip(np.exp(0.9 * hp), METAL_DETAIL_MIN, 1.0 / f0.max())
+            from .materials import metal_f0
+            f0 = metal_f0(L["f0"], _lin(srgb[s]), lab)
+            detail = np.clip(np.exp(0.9 * hp), METAL_DETAIL_MIN, min(1.0 / f0.max(), 2.0))
             base[s] = _srgb(f0[None] * detail[:, None])
             ink = (_lin(srgb[s]).mean(1) < 0.08) & (np.hypot(lab[:, 1], lab[:, 2]) < 10)
             ink &= ink[kn].mean(1) < 0.5                                  # thin strokes; a wide dark patch is a reflection

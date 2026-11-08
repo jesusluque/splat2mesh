@@ -183,7 +183,8 @@ def _metal_off_colour(k, m) -> bool:
     if not f0 and cls != "skin":
         return False
     if f0:
-        fl = _srgb_to_lab(np.asarray([f0], np.float32))[0]
+        f = np.asarray([f0], np.float32)                 # F0 is linear reflectance: to sRGB before Lab
+        fl = _srgb_to_lab(np.where(f <= 0.0031308, f * 12.92, 1.055 * np.power(f, 1 / 2.4) - 0.055))[0]
         if np.hypot(fl[1], fl[2]) < 15:             # silver, steel, chrome: no hue to compare
             return False
     if _frames_px is None:
