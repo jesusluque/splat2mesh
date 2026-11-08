@@ -69,6 +69,13 @@ the picture, generated on its own with Idol and placed back where it is in the w
 | `components.py` | experiment | one closed mesh per component (ENEAS cut-out → Idol → direct mode), placed using the whole object's material votes |
 | `iris_parts.py` | experiment | clean picture of each component with Iris-3B Turbo img2img from its cut-out |
 | `pick_parts.py`, `part_sheet.py` | experiment | the vision model picks the best candidate per component; review sheet |
+| `gs_components.py` | experiment | the same with no geometry: the object as an assembly of splat components (the vision model's list with copies and mirror pairs; the whole splat's per-gaussian votes say where each copy is, in 3D; one Idol splat per component, fitted per copy by Idol's cameras and scaled ICP; `components.json` lists them) |
+
+## Captured scenes
+
+| Script | Status | What |
+|---|---|---|
+| `gs_crop.py` | tool | cuts the object the training cameras look at out of a captured 3DGS scene (`point_cloud.ply` + `cameras.json`) and puts it in Idol's frame (centred, Y down), ready for `splat_flow.py` |
 
 ## Picture quality before Idol
 
