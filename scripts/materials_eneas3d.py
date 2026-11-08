@@ -75,17 +75,26 @@ import contextlib, time as _time
 def _gpu_lock(path=Path.home() / ".cache/splat2mesh_eneas.lock"):
     """One ENEAS job at a time on the remote GPU (two on an 8 GB card thrash)."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    from splat2mesh.config import _alive
+    owner = path / "pid"
     while True:
         try:
-            path.mkdir(); break
+            path.mkdir(); owner.write_text(str(os.getpid())); break
         except FileExistsError:
-            if _time.time() - path.stat().st_mtime > 3600:   # stale lock
-                path.rmdir()
+            try:            # stale: its owner is gone (a cancelled job), or it is over an hour old
+                pid = int(owner.read_text() or 0) if owner.exists() else -1
+                stale = _time.time() - path.stat().st_mtime > 3600 or (pid > 0 and not _alive(pid)) \
+                    or (pid == -1 and _time.time() - path.stat().st_mtime > 60)
+            except (OSError, ValueError):
+                stale = False
+            if stale:
+                print("ENEAS lock: removing a stale lock", flush=True)
+                owner.unlink(missing_ok=True); path.rmdir()
             _time.sleep(10)
     try:
         yield
     finally:
-        path.rmdir()
+        owner.unlink(missing_ok=True); path.rmdir()
 if not reuse or run_items:
  with _gpu_lock():
    job.reset()
