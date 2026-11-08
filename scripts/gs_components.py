@@ -185,7 +185,23 @@ def make_parts(ref: Path, out: Path, rows):
         print(f"{ph}: picture {pic.name}", flush=True)
         from splat2mesh.remote import idol_sample
         ply = idol_sample(pic, d / "idol", PART_GAUSSIANS, 42)
+        if flatness(ply) < CARD_MAX and pic.name != "described.png":
+            # Idol made a flat card (a glass flask seen as its picture): drawn whole from its description instead
+            print(f"{ph}: flat card ({flatness(ply):.3f}), drawn from its description", flush=True)
+            pic = described_picture(ref, ph, r["material"], (xs.min(), ys.min(), xs.max(), ys.max()), d)
+            ply = idol_sample(pic, d / "idol_described", PART_GAUSSIANS, 42)
         one_material(ply, d, f"{r['material']}|{ph}")
+
+
+CARD_MAX = 0.03          # thinnest / widest spread of a part's gaussians: a flask card 0.005, a flat buckle 0.14
+
+
+def flatness(ply) -> float:
+    """Thinnest over widest principal spread of the opaque gaussians."""
+    v, xyz, al = _gauss(ply)
+    x = xyz[al > 0.3]
+    e = np.sort(np.linalg.svd(x - x.mean(0), compute_uv=False))
+    return float(e[0] / max(e[2], 1e-9))
 
 
 SMALL_PX = 80            # a copy under this many pixels across in the reference is drawn from its description
@@ -256,6 +272,27 @@ CLUSTER_R = 0.012       # × the whole's size: gaussians of one part closer than
 COPY_MIN = 0.15         # a 3D cluster is a copy if it has at least this share of the largest one's gaussians
 YAW_SPAN, YAW_STEP = 60, 15     # degrees tried around the rotation the two Idol cameras give
 ICP_SCALE_TOL = 0.3
+
+
+FIT_MIN = 0.2           # two-way share of points within reach after ICP; under it the copy stays as the whole has it
+SIZE_TOL = 1.6          # the placed copy's extent may be at most this × (and at least 1/this ×) the whole's copy
+
+
+def _extent(P):
+    return float(np.linalg.norm(np.percentile(P, 98, 0) - np.percentile(P, 2, 0)))
+
+
+def accept(T, f, Pp, Pw):
+    """A fitted copy is placed only if its transform is finite, its fit is fair and its size matches the copy in
+    the whole (a scaled ICP on a poor fit can grow a buckle to the size of the corset)."""
+    if not np.all(np.isfinite(T)):
+        return False, "no fit"
+    if f < FIT_MIN:
+        return False, f"fit {f:.2f}"
+    r = _extent(Pp @ T[:3, :3].T) / max(_extent(Pw), 1e-9)
+    if not 1 / SIZE_TOL <= r <= SIZE_TOL:
+        return False, f"size ×{r:.2f}"
+    return True, ""
 
 
 def _gauss(ply):
@@ -408,7 +445,7 @@ def place_all(out: Path, whole: Path, rows):
         pmask = (pal > 0.3) & ~(np.asarray(pv["loose"]) > 0)
         cam = next((d / "idol").glob("*camera*.json"), None)
         R0 = Bw @ cam_basis(cam).T if cam else np.eye(3)
-        placed = []
+        placed = []; done = []
         for ci, idx in enumerate(cps):
             P = xyz[sel[idx]][al[sel[idx]] > 0.3]
             if len(P) < 50:
@@ -417,7 +454,14 @@ def place_all(out: Path, whole: Path, rows):
             if r["mirrored"] and ci % 2 == 1 and sym is not None:
                 Hm = np.eye(3); Hm[sym[0], sym[0]] = -1        # the other side's copy: the part mirrored
             T, f = fit(pxyz[pmask], P, R0, Hm)
+            ok, why = accept(T, f, pxyz[pmask], P)
+            if not ok:
+                print(f"{r['phrase']} copy {ci + 1}/{r['count']}: not placed ({why}), the whole keeps it", flush=True)
+                listing.append({"component": r["phrase"], "material": r["material"], "copy": ci + 1,
+                                "of": r["count"], "status": f"kept in the whole ({why})"})
+                continue
             placed.append((T, f, ci, Hm is not None))
+            done.append(idx)
         # copies the whole does not show apart (hidden, or fused with the other one): mirrored through the plane
         if len(placed) < r["count"] and r["mirrored"] and sym is not None and placed:
             ax, c0 = sym
@@ -433,8 +477,11 @@ def place_all(out: Path, whole: Path, rows):
                             "mirrored": bool(mir), "fit": round(float(f), 3), "gaussians": int(len(g)),
                             "transform": np.round(T, 6).tolist()})
             print(f"{r['phrase']} copy {ci + 1}/{r['count']}{' mirrored' if mir else ''}: fit {f:.2f}", flush=True)
-        if placed:
-            remove[sel] = True
+        if placed and len(done) == len(cps):
+            remove[sel] = True                      # every copy replaced: also the stray gaussians between them
+        else:
+            for idx in done:
+                remove[sel[idx]] = True
     keep = v[~remove]
     common = [n for n in keep.dtype.names if all(n in p.dtype.names for p in pieces)]
     allv = np.concatenate([keep[common]] + [p[common] for p in pieces]) if pieces else keep
