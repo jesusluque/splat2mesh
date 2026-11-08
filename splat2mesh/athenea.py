@@ -180,6 +180,20 @@ def asset_bounds(usd):
     return np.array([c[0], c[1], c[2]]), float((b.GetMax() - b.GetMin()).GetLength() / 2)
 
 
+def fit_distance(usd, elev_deg: float = 15.0, margin: float = 1.06) -> float:
+    """The camera distance from the box centre at which the asset fills the frame at every turn of a turntable:
+    the vertical extent seen at this elevation and the horizontal reach both fit the 50 mm lens, with the near
+    side of the object (closer, so larger) taken into account."""
+    from pxr import Usd, UsdGeom
+    s = Usd.Stage.Open(str(usd))
+    b = UsdGeom.BBoxCache(0, ["default", "render"]).ComputeWorldBound(s.GetPseudoRoot()).ComputeAlignedRange()
+    ex, ey, ez = ((b.GetMax() - b.GetMin()) / 2)
+    rh, e = math.hypot(ex, ez), math.radians(elev_deg)
+    t = APERTURE / 2 / FOCAL                                 # tan of the half field of view
+    need = max(ey * math.cos(e) + rh * math.sin(e), rh) * margin
+    return need / t + rh * math.cos(e)
+
+
 def dome_scene(asset, hdri=HDRI, out_dir=None, intensity: float = 1.0) -> Path:
     """OUT_DIR/scene.usda: a stage referencing the asset under an HDRI dome light."""
     a = Path(asset).resolve()
@@ -270,12 +284,13 @@ def encode(frames_glob_pattern: str, out_mp4, fps: int = 24):
 
 
 def turntable(asset, out_mp4, frames: int = 96, size: int = 1080, technique: str = "raster", spp: int = 96,
-              elev: float = 15.0, start_deg: float = 0.0, dist: float = 3.3, hdri=HDRI, grey: float = 0.8):
-    """Asset under the HDRI dome, turned about its bounding-box centre, composited on grey; PNG frames + MP4."""
+              elev: float = 15.0, start_deg: float = 0.0, dist: float = 0.0, hdri=HDRI, grey: float = 0.8):
+    """Asset under the HDRI dome, turned about its bounding-box centre, composited on grey; PNG frames + MP4.
+    dist: camera distance in bounding-sphere radii; 0 fits the asset to the frame (fit_distance)."""
     out_mp4 = Path(out_mp4); fr = out_mp4.with_name(out_mp4.stem + "_frames"); fr.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp())
     C, R = asset_bounds(asset)
-    eye = orbit(C, R * dist, 1, elev, start_deg)[0][1]
+    eye = orbit(C, R * dist if dist > 0 else fit_distance(asset, elev), 1, elev, start_deg)[0][1]
     exrs = stage(dome_scene(asset, hdri, tmp), tmp / "exr", turntable=frames, eye=eye, target=C, size=size,
                  technique=technique, spp=spp, log=tmp / "athenea.log")
     for i, e in enumerate(exrs):
@@ -313,7 +328,7 @@ def main():
     for k, v in (("frames", 96), ("size", 1080), ("spp", 96)):
         t.add_argument(f"--{k}", type=int, default=v)
     t.add_argument("--technique", default="raster", choices=["raster", "rt"])
-    for k, v in (("elev", 15.0), ("start-deg", 0.0), ("dist", 3.3), ("grey", 0.8)):
+    for k, v in (("elev", 15.0), ("start-deg", 0.0), ("dist", 0.0), ("grey", 0.8)):
         t.add_argument(f"--{k}", type=float, default=v)
     t.add_argument("--hdri", default=str(HDRI))
     s = sp.add_parser("splat-turntable"); s.add_argument("ply"); s.add_argument("out")

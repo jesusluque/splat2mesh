@@ -36,8 +36,8 @@ from pathlib import Path
 
 from .config import ROOT, TOOLS, WINDOWS, venv_python
 
-ATHENEA_URL = "https://github.com/jesusluque/athenea/releases/download/v0.3.0/athenea-0.3.0-windows-x64.zip"
-ATHENEA_SHA256 = "a281d3537637ec97e7a4af94c14a4b962429a573130717bf1cd3de224e82dfce"
+ATHENEA_URL = "https://github.com/jesusluque/athenea/releases/download/v0.4.0/athenea-0.4.0-windows-x64.zip"
+ATHENEA_SHA256 = "7c0a8ce9e9a9193c68c250bbc97e4a430c7dbab8dae15614435e8e6ef8714796"
 UV_URL = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
 IDOL_GIT = "https://github.com/speridlabs/idol-sdk.git"
 ENEAS_GIT = "https://github.com/speridlabs/eneas.git"
@@ -219,12 +219,22 @@ def install_athenea():
     # as a minimal CUDA folder (athenea_env points CUDA_PATH at it)
     progress(90, c, "CUDA compiler for athenea's shaders (nvrtc, ~100 MB)")
     pk, cu = TOOLS / "cuda-pkgs", TOOLS / "cuda"
-    run([uv(), "pip", "install", "--quiet", "--target", pk, "nvidia-cuda-nvrtc-cu12", "nvidia-cuda-runtime-cu12"], c)
+    run([uv(), "pip", "install", "--quiet", "--target", pk, "nvidia-cuda-nvrtc-cu12", "nvidia-cuda-runtime-cu12",
+         "nvidia-nvjitlink-cu12"], c)
     (cu / "bin").mkdir(parents=True, exist_ok=True); (cu / "include").mkdir(exist_ok=True)
     for dll in pk.rglob("*.dll"):
         shutil.copy2(dll, cu / "bin" / dll.name)
     for inc in [d for d in pk.rglob("include") if d.is_dir()]:
         shutil.copytree(inc, cu / "include", dirs_exist_ok=True)
+    # athenea's own CUDA runtime must be the same version as the nvrtc it finds through CUDA_PATH: the 0.4.0 zip
+    # carries 12.6 and, against the wheels' 12.9, no CUDA device opens (it falls back to D3D12, which has no
+    # denoiser). The wheels' DLLs replace the zip's, and nvrtc builtins of another version are removed.
+    for dll in (cu / "bin").glob("*.dll"):
+        shutil.copy2(dll, exe.parent / dll.name)
+    keep = {p.name for p in (cu / "bin").glob("nvrtc-builtins64_*.dll")}
+    for old in exe.parent.glob("nvrtc-builtins64_*.dll"):
+        if keep and old.name not in keep:
+            old.unlink()
     progress(95, c, "checking")
     run([exe, "info"], c, check=False, env={"CUDA_PATH": str(cu)})
     write_user_config({"athenea": {"bin": str(exe)}})

@@ -1,6 +1,8 @@
 """Re-render a UV-textured mesh (unlit base colour) at given cameras by ray casting; PSNR vs views."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import open3d as o3d
 from PIL import Image
@@ -13,7 +15,7 @@ def load_usd_textured(usd_path: str, prim="/Asset/Geom"):
     V = np.asarray(m.GetPointsAttr().Get(), np.float32)
     F = np.asarray(m.GetFaceVertexIndicesAttr().Get(), np.uint32).reshape(-1, 3)
     st = np.asarray(UsdGeom.PrimvarsAPI(m).GetPrimvar("st").Get(), np.float32)
-    tex = np.asarray(Image.open(usd_path.rsplit("/", 1)[0] + "/basecolor.png").convert("RGB"), np.float32)[::-1] / 255
+    tex = np.asarray(Image.open(Path(usd_path).parent / "basecolor.png").convert("RGB"), np.float32)[::-1] / 255
     return V, F, st, tex
 
 

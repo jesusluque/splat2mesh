@@ -99,7 +99,7 @@ function advancedSummary(o) {      // only what differs from the defaults
   if (o.glass.mode !== "path") d.push("glass for browsers");
   if (o.glass.cell !== 1) d.push(`glass spacing ${o.glass.cell}`);
   if (o.render.technique === "rt" && o.render.spp !== 96) d.push(`${o.render.spp} spp`);
-  if (o.render.elev !== 15 || o.render.dist !== 3.3) d.push(`camera ${o.render.elev}° × ${o.render.dist}`);
+  if (o.render.elev !== 15 || o.render.dist !== 0) d.push(`camera ${o.render.elev}° × ${o.render.dist}`);
   if (o.render.grey !== 0.8) d.push(`grey ${o.render.grey}`);
   return d.join(", ");
 }

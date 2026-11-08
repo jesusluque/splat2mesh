@@ -17,7 +17,7 @@ JOB.json (every key optional except source and its input):
             "render_tex": 2048},
    "parts": "",                                  # "material: part, part; ..." to skip the automatic part list
    "render": {"turntable": true, "frames": 48, "size": 900, "technique": "raster", "spp": 96, "elev": 15,
-              "dist": 3.3, "grey": 0.8, "hdri": ""}}
+              "dist": 0, "grey": 0.8, "hdri": ""}}
 
 Progress lines:  PROGRESS <0-100> <stage>: <message>      Outputs:  <out>/results.json
 """
@@ -242,7 +242,7 @@ def turntable(job, asset: Path, mp4: Path, front_deg: float, log: Path, prog, st
         kw["hdri"] = r["hdri"]
     tt(asset, mp4, frames=int(r.get("frames", 48)), size=int(r.get("size", 900)),
        technique=r.get("technique", "raster"), start_deg=front_deg, spp=int(r.get("spp", 96)),
-       elev=float(r.get("elev", 15)), dist=float(r.get("dist", 3.3)), grey=float(r.get("grey", 0.8)), **kw)
+       elev=float(r.get("elev", 15)), dist=float(r.get("dist", 0)), grey=float(r.get("grey", 0.8)), **kw)
     prog(stage, 1, mp4.name)
 
 
