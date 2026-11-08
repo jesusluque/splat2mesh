@@ -59,7 +59,7 @@ def bom(ref: Path, out: Path) -> list:
         ph = str(p.get("phrase", "")).strip().lower(); m = str(p.get("material", "")).strip().lower()
         if not ph or m not in mats:
             continue
-        ph = ph if ph.startswith("the ") else "the " + ph
+        ph = (ph if ph.startswith("the ") else "the " + ph).replace("'", "").replace('"', "")   # as ENEAS gets it
         if ph in seen:
             continue
         seen.add(ph)
@@ -122,9 +122,6 @@ def whole_flow(ref: Path, out: Path, whole: Path, rows):
     subprocess.run(cmd, check=True)
 
 
-if __name__ == "__main__":
-    main()
-
 
 # ---------------------------------------------------------------- 3. parts: each standalone component on its own
 PART_GAUSSIANS = 262144
@@ -143,7 +140,7 @@ def _components_module():
 
 def make_parts(ref: Path, out: Path, rows):
     """Reference mask (ENEAS on the picture itself) → one copy → its whole extent (recomposed where something
-    covered it) → Iris-3B's clean picture of it alone (deepseek picks; the cut-out if none is good) → Idol → the
+    covered it) → Iris-3B's clean picture of it alone (deepseek picks; drawn from its description if none is complete) → Idol → the
     component's material on every gaussian, finished like any splat (normals, albedo, glass tint)."""
     C = _components_module()
     comps = [r for r in rows if r.get("standalone")]
@@ -162,24 +159,83 @@ def make_parts(ref: Path, out: Path, rows):
         if m is None or m.mean() < C.MIN_MASK / 4:
             print(f"{ph}: no mask on the reference, left in the whole", flush=True)
             continue
-        copy = C.instance_masks(m)[0] if r["count"] > 1 else m
+        copy = pick_copy(C.instance_masks(m), {k: o for k, o in allm.items() if k != ph}) if r["count"] > 1 else m
         others = np.zeros_like(m)
         for k, o in allm.items():
             if k != ph:
                 others |= o
-        region = C.recompose_region(copy, others, r["revolution"])
-        cut = d / "cut.png"
-        C.cut_out(ref, copy, cut, region if region.sum() > copy.sum() * 1.05 else None)
-        pic = None
-        try:
-            pic = C.iris_picture(ref, ph, r["material"], cut, others, d)
-        except Exception as e:
-            print(f"{ph}: Iris failed ({e}), the cut-out is used", flush=True)
-        pic = Path(pic) if pic else cut
+        ys, xs = np.nonzero(copy)
+        side = max(np.ptp(ys), np.ptp(xs)) + 1
+        if side < SMALL_PX:
+            # too few pixels to cut out (a buckle of 25 px): the piece is drawn from its description instead
+            pic = described_picture(ref, ph, r["material"], (xs.min(), ys.min(), xs.max(), ys.max()), d)
+        else:
+            region = C.recompose_region(copy, others, r["revolution"])
+            cut = d / "cut.png"
+            C.cut_out(ref, copy, cut, region if region.sum() > copy.sum() * 1.05 else None)
+            pic = None
+            try:
+                pic = C.iris_picture(ref, ph, r["material"], cut, others, d)
+            except Exception as e:
+                print(f"{ph}: Iris failed ({e})", flush=True)
+            # no complete recomposition: a cut-out with straight edges makes a cut piece, so it is drawn whole
+            # from its description instead
+            pic = Path(pic) if pic else described_picture(ref, ph, r["material"],
+                                                          (xs.min(), ys.min(), xs.max(), ys.max()), d)
         print(f"{ph}: picture {pic.name}", flush=True)
         from splat2mesh.remote import idol_sample
         ply = idol_sample(pic, d / "idol", PART_GAUSSIANS, 42)
         one_material(ply, d, f"{r['material']}|{ph}")
+
+
+SMALL_PX = 80            # a copy under this many pixels across in the reference is drawn from its description
+DESCRIBE = ("The first picture shows {phrase} of the object in the second picture, enlarged. Describe that single "
+            "piece for a product photographer, in one English sentence of at most 30 words: its shape, its colour, "
+            "its material ({material}) and its visible details, as one separate piece (not worn, not attached). "
+            "Answer JSON: {{\"description\": \"...\"}}")
+
+
+CLAIM_SHARE, CLAIM_SIZE = 0.5, 20    # a blob over half inside another part's mask under 20x its size is that part
+
+
+def pick_copy(blobs, others: dict):
+    """The copy of a repeated part to make: its largest blob that no other part of similar size claims ("the corset
+    buckles" also catch the belt buckle, which "the belt buckle" claims; the corset covering every buckle is far
+    bigger and does not count)."""
+    for b in blobs:
+        n = b.sum()
+        if not any((b & o).sum() > CLAIM_SHARE * n and o.sum() < CLAIM_SIZE * n for o in others.values()):
+            return b
+    return blobs[0]
+
+
+def described_picture(ref: Path, phrase: str, material: str, box, d: Path) -> Path:
+    """A small component, drawn whole: deepseek-flash describes it from an enlarged crop (with the whole picture
+    for context), Iris-3B Turbo draws that description as a product photo on white."""
+    import subprocess
+    pic = d / "described.png"
+    if pic.exists():
+        return pic
+    from splat2mesh.deepseek import ask
+    from splat2mesh.deepseek import img_url
+    from splat2mesh.config import cfg, gpu_lock, iris_python
+    im = Image.open(ref).convert("RGB")
+    x0, y0, x1, y1 = box; m = max(x1 - x0, y1 - y0) * 0.6
+    crop = im.crop((int(max(0, x0 - m)), int(max(0, y0 - m)), int(min(im.width, x1 + m)), int(min(im.height, y1 + m))))
+    crop = crop.resize((512, int(512 * crop.height / max(crop.width, 1))), Image.LANCZOS)
+    j = ask([{"type": "image_url", "image_url": {"url": img_url(crop)}},
+             {"type": "image_url", "image_url": {"url": img_url(im)}},
+             {"type": "text", "text": DESCRIBE.format(phrase=phrase, material=material)}])
+    desc = str(j.get("description", "")).strip() or f"{phrase} made of {material}"
+    prompt = (f"product photo of one single piece: {desc}. Isolated on a plain white background, centred, the whole "
+              f"piece in the frame, sharp focus, studio light")
+    (d / "described.txt").write_text(prompt)
+    print(f"{phrase}: drawn from its description: {desc}", flush=True)
+    with gpu_lock():
+        subprocess.run([iris_python(), str(ROOT / "scripts/iris_local.py"), prompt, str(pic), "--seed", "7",
+                        "--size", "1024x1024", "--checkpoint", str(Path(cfg("iris.dir")) / "weights" / "turbo")],
+                       check=True)
+    return pic
 
 
 def one_material(ply, d: Path, name: str):
@@ -397,3 +453,7 @@ def place_all(out: Path, whole: Path, rows):
     print("USD:", write_splat_usd(asm / "splat_materials.ply", out / "assembly.usdc", y_down=True), flush=True)
     print(f"assembly: {len(keep)} gaussians of the whole kept, {sum(len(p) for p in pieces)} from "
           f"{len(pieces)} placed copies", flush=True)
+
+
+if __name__ == "__main__":
+    main()
