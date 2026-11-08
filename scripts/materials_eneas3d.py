@@ -133,7 +133,15 @@ if "--no-overlap" not in sys.argv and len(masks) > 1:
         print("overlap resolution skipped:", e, flush=True)
 # grounding sanity: a secondary part (not the first, main body) that covers most of the object is a mislocated
 # phrase ("the side inlay" → the whole box) — drop it
-obj = np.stack([np.asarray(Image.open(f).convert("L"), np.float32) < 250 for f in frames])
+def _obj_mask(f):
+    """The object's pixels in a frame: the renderer's own mask when there is one (the splat orbit, on grey),
+    else everything not white (the mesh orbit, on white)."""
+    m = f.parent.parent / "views" / f"{f.stem}_mask.png"
+    if m.exists():
+        a = np.asarray(Image.open(m).convert("L").resize(Image.open(f).size), np.float32)
+        return a > 127
+    return np.asarray(Image.open(f).convert("L"), np.float32) < 250
+obj = np.stack([_obj_mask(f) for f in frames])
 first = f"{items[0][0]}|{items[0][1]}" if items else None
 for k in list(masks):
     if k == first:
@@ -165,8 +173,8 @@ for c, t in auto_items:
     if k not in masks:
         continue
     others = np.zeros_like(masks[k])
-    for o in masks:
-        if o != k:
+    for o in masks:      # the specific parts only: a phrase grounded on the whole object (the main body, or
+        if o != k and (masks[o] & obj).sum() < 0.6 * max(obj.sum(), 1):   # a chimney ENEAS could not single out) does not erase it
             others |= masks[o]
     cover = (masks[k] & obj).sum() / max(obj.sum(), 1)
     if cover > GENERIC_MAX_COVER:
@@ -182,7 +190,7 @@ if SPLAT_ONLY:
     from splat2mesh.gs_finish import finish
     if not masks:              # ENEAS found nothing: every gaussian is the description's main material
         main = max({c for c, _ in items}, key=[c for c, _ in items].count) if items else "glazed ceramic"
-        masks = {f"{main}|the object": np.stack([np.asarray(Image.open(f).convert("L")) < 250 for f in frames])}
+        masks = {f"{main}|the object": obj}
     from splat2mesh.gs_materials import refine_votes
     votes_g, _ = vote_gaussians(GS, asset / "mat" / "gs_orbit", masks)
     _r = json.loads((asset / "mat" / "gs_orbit" / "cameras.json").read_text())["radius"]
