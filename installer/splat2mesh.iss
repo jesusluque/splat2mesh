@@ -8,7 +8,7 @@
 
 #define AppName "splat2mesh"
 #ifndef AppVersion
-  #define AppVersion "0.4.3"
+  #define AppVersion "0.5.0"
 #endif
 #ifndef Staging
   #define Staging "staging"
