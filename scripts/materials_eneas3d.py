@@ -117,7 +117,10 @@ def _fit(m, n):            # ENEAS may return fewer frames than sent: pad with e
 masks = {f"{cls}|{ph}": _fit(z[ph], len(frames)) for cls, ph in items if ph in z.files}
 # overlapping masks (a phrase grounded on too much: "the body" = the whole figurine, "the crystal" = dragon and
 # crystal): resolved per pixel by reliable specific masks, then colour clusters named by DeepSeek (splat2mesh/overlap)
-if "--no-overlap" not in sys.argv and len(masks) > 1:
+from splat2mesh.config import deepseek_key as _dskey
+if "--no-overlap" not in sys.argv and len(masks) > 1 and not _dskey():
+    print("overlap resolution skipped: no DeepSeek key", flush=True)
+if "--no-overlap" not in sys.argv and len(masks) > 1 and _dskey():
     try:
         from splat2mesh.overlap import resolve, verify
         sys.path.insert(0, str(ROOT / "scripts"))
@@ -221,10 +224,13 @@ if not masks:          # ENEAS found nothing: whole object = the description's m
     print({"seen_texels": 0, "fallback": main}); print(apply(spec)); sys.exit(0)
 if GS:
     from splat2mesh.gs_materials import vote_gaussians, texel_votes, write_ply
+    from splat2mesh.gs_materials import refine_votes
     votes_g, _ = vote_gaussians(GS, asset / "mat" / "gs_orbit", masks)
+    _r = json.loads((asset / "mat" / "gs_orbit" / "cameras.json").read_text())["radius"]
+    votes_g = refine_votes(GS, votes_g, list(masks), _r)          # the same decisions as the splat-only output
     R = Image.open(asset / "basecolor.png").size[0]
     print("splat materials:", write_ply(GS, asset / "mat" / "splat_materials.ply", votes_g, list(masks)))
-    print(from_view_masks(spec, orbit, masks, votes=texel_votes(asset, GS, votes_g, R)))
+    print(from_view_masks(spec, orbit, masks, votes=texel_votes(asset, GS, votes_g, R), cap_transparent=False))
 else:
     print(from_view_masks(spec, orbit, masks))
 print(apply_texel_classes(spec))

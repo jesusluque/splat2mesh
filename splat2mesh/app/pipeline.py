@@ -228,7 +228,9 @@ def mesh(job, ply, cam, inp, out: Path, log: Path, prog, reuse_from: Path | None
             shutil.copytree(reuse_from / "mat" / "gs_orbit", mat / "gs_orbit", dirs_exist_ok=True)
         if (reuse_from / "materials.txt").exists():
             shutil.copy(reuse_from / "materials.txt", dst / "00" / "materials.txt")
-    sh([PY, ROOT / "scripts/flow_batch.py", src, dst, out / "prompts.txt", "--gs", "--reuse-masks"], log)
+    m = job.get("materials", {})          # the same mask rules as the splat (no overlap / coverage when turned off)
+    sh([PY, ROOT / "scripts/flow_batch.py", src, dst, out / "prompts.txt", "--gs", "--reuse-masks"]
+       + (["--no-coverage"] if m.get("coverage") is False else []) + (["--no-overlap"] if m.get("overlap") is False else []), log)
     prog("mesh", 1, "mesh with materials ready")
     return dst / "00" / "usd" / "asset.usda"
 

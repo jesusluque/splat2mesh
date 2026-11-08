@@ -90,7 +90,8 @@ for d in items:
     t = time.time()
     p = subprocess.run([sys.executable, str(ROOT / "scripts/materials_eneas3d.py"), str(out / d.name / "usd"),
                         str(d / "idol_input.png"), desc] + (["--gs", str(d / f"{d.name}.ply")] if "--gs" in sys.argv else [])
-                       + (["--reuse-masks"] if "--reuse-masks" in sys.argv else []),
+                       + (["--reuse-masks"] if "--reuse-masks" in sys.argv else [])
+                       + [f for f in ("--no-overlap",) if f in sys.argv],
                        capture_output=True, text=True)
     (out / d.name / "materials.log").write_text(p.stdout + p.stderr)
     from splat2mesh.interior import extract_interior          # filaments, wicks… inside glass parts

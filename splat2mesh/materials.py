@@ -409,11 +409,13 @@ def refine_by_colour(tex, mask, votes, cls_tex, conf: float = 0.75, prior_w: flo
     return out
 
 
-def from_view_masks(spec_json, orbit_dir, masks: dict, votes=None) -> dict:
+def from_view_masks(spec_json, orbit_dir, masks: dict, votes=None, cap_transparent: bool = True) -> dict:
     """masks = {"class|phrase": [n_views HxW bool]}: back-project every view's masks to texels (smallest mask wins
     per pixel), vote per texel; texels no view saw take the majority class of their colour region.
     votes: [n_phrases, R*R] texel votes computed elsewhere (gs_materials.texel_votes: from the splat's gaussians);
-    the back-projection is then skipped and only the rules below run."""
+    the back-projection is then skipped and only the rules below run.
+    cap_transparent: the 25 % cap on a secondary transparent part; off when the votes come from a splat whose
+    masks were already settled (a lantern's chimney is a large glass part, and the splat keeps it)."""
     spec_p = Path(spec_json); spec = json.loads(spec_p.read_text())
     tex, mask = _texture_and_mask(Path(spec["asset"]))
     R = tex.shape[0]
@@ -507,7 +509,7 @@ def from_view_masks(spec_json, orbit_dir, masks: dict, votes=None) -> dict:
     labT = _srgb_to_lab(tex)
     for i, n in enumerate(names):
         cls = n.split("|")[0]
-        if _lib(cls).get("transmission", 0) <= 0 or cls == first_cls:
+        if not cap_transparent or _lib(cls).get("transmission", 0) <= 0 or cls == first_cls:
             continue
         sel = (cls_tex == i) & mask
         if sel.sum() <= 0.25 * mask.sum():
