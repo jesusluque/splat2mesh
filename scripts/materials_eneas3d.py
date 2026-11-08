@@ -3,7 +3,7 @@ mesh (tracked across views) → masks back-projected to texels and voted → rou
 
     python scripts/materials_eneas3d.py ASSET_DIR INPUT_IMAGE "gold: the gold coin, the gold bell; porcelain: the body"
 """
-import json, os, re, subprocess, sys
+import json, math, os, re, subprocess, sys
 from pathlib import Path
 import numpy as np
 from PIL import Image
