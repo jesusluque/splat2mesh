@@ -27,8 +27,8 @@ picture. A batch takes one sentence per line, or several pictures.
 
 Iris-3B Turbo was distilled at about one megapixel in seven aspect buckets (1024×1024, 896×1200, 896×1344,
 752×1344 and their landscape transposes); larger sizes lose quality. The most detail Idol can get is therefore the
-object filling the frame in the bucket of its shape: a tall lantern in 896×1200 put 286 000 pixels on the object
-against 204 000 at 1024×1024 with the same prompt. **Fill the frame** (on by default) adds that request to the
+object filling the frame in the bucket of its shape: a tall object in 896×1200 gets about 40 % more pixels than at
+1024×1024 with the same prompt. **Fill the frame** (on by default) adds that request to the
 sentence when it does not say it. An upscale alone does not help (Idol resizes it back to 1024 px); the detail
 pass below does.
 
@@ -38,12 +38,10 @@ pass below does.
 gives it nothing: the extra pixels are resized away. The detail pass (`scripts/detail_pass.py`) puts sharper detail
 *inside the same pixels*: the whole picture goes through the Iris-3B restorer at 4× without being shrunk first and
 comes back to its own size, then each face (found by DeepSeek) gets a second pass. Eyes, lashes, hair strands,
-stitching, rivets and laces come out defined, and Idol keeps them: with the same seed, the inventor's eyes come out
-open with irises and eyebrows instead of smudged, and the shape from the side and the back is unchanged. Real-ESRGAN (BSD-3) and SwinIR-L (Apache-2.0) were tried as well
+stitching, rivets and laces come out defined, and Idol keeps them: with the same seed, eyes come out open with
+irises and eyebrows instead of smudged, and the shape from the side and the back is unchanged. Real-ESRGAN (BSD-3) and SwinIR-L (Apache-2.0) were tried as well
 (`scripts/sr_upscale.py`, through spandrel): they left faces smooth, and the Iris restorer is used. About four
 minutes; it needs Iris-3B installed locally (with its restorer, +12 GB).
-
-<img src="img/detail_pass.jpg" width="100%">
 
 **3. 3D** — Idol's seeds and the number of gaussians. With more than one seed, each sample is rendered from four
 sides with athenea and scored by DeepSeek against the picture, and the best is kept
