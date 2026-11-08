@@ -88,7 +88,7 @@ class Jobs:
             return [sys.executable, "-u", "-m", "splat2mesh.app.pipeline", str(d / "job.json")]
         p = j["params"]
         return [sys.executable, "-u", "-m", "splat2mesh.winsetup", "install", *p["components"],
-                "--vae", p.get("vae", "klein"), "--iris-mode", p.get("iris_mode", "cpu-encoder")]
+                "--vae", p.get("vae", "klein"), "--iris-mode", p.get("iris_mode", "cpu-encoder")] + (["--optix"] if p.get("optix") else [])
 
     def _worker(self):
         while True:

@@ -214,6 +214,9 @@
       <option value="cpu-encoder" selected>local, text encoder on CPU (8 GB GPUs)</option>
       <option value="gpu">local, all on GPU (16 GB+)</option><option value="space">online Space only</option></select></label>
   </div>
+  <label class="check"><input type="checkbox" id="optix"><span><b>NVIDIA OptiX headers for athenea</b> — path tracing
+    on CUDA with the OIDN denoiser. NVIDIA's SDK licence, not open source: commercial use must be notified to NVIDIA.
+    Without them athenea path traces on Vulkan (no denoiser: use more samples).</span></label>
   <button id="install_all" class="go">Install everything missing</button>
   <p class="hint">Links: <a href="https://huggingface.co/facebook/dinov3-vith16plus-pretrain-lvd1689m" target="_blank">DINOv3 terms</a> ·
     <a href="https://huggingface.co/settings/tokens" target="_blank">Hugging Face tokens</a> ·

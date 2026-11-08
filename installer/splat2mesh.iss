@@ -45,6 +45,7 @@ Name: "custom"; Description: "Custom"; Flags: iscustom
 [Components]
 Name: "core"; Description: "splat2mesh (Python 3.12 environment, ~1 GB)"; Types: full gpu8 render custom; Flags: fixed
 Name: "athenea"; Description: "athenea renderer (~300 MB)"; Types: full gpu8 render custom
+Name: "athenea\optix"; Description: "NVIDIA OptiX headers: path tracing on CUDA with the denoiser (NVIDIA's SDK licence, not open source: commercial use must be notified to NVIDIA). Without them athenea path traces on Vulkan."; Types: custom; Flags: dontinheritcheck
 Name: "idol"; Description: "Idol: picture → 3D Gaussian splat (PyTorch + weights, ~8 GB; DINOv3 needs a Hugging Face token)"; Types: full gpu8 custom
 Name: "eneas"; Description: "ENEAS: part masks for materials (~4 GB, + ~9 GB of weights on first use)"; Types: full gpu8 custom
 Name: "iris"; Description: "Iris-3B Turbo locally: sentence → picture (~14 GB)"; Types: full custom
@@ -259,6 +260,8 @@ begin
     begin
       Lo := 130 + I * Span;
       Comps := '-u -m splat2mesh.winsetup install ' + List[I] + ' --vae ' + Vae + ' --iris-mode ' + IrisMode;
+      if (List[I] = 'athenea') and WizardIsComponentSelected('athenea\optix') then
+        Comps := Comps + ' --optix';
       if (List[I] = 'idol') and (Trim(KeysPage.Values[2]) <> '') then
         Comps := Comps + ' --dinov3-dir "' + Trim(KeysPage.Values[2]) + '"';
       Tok := Trim(KeysPage.Values[0]);

@@ -3,7 +3,7 @@
 Used by the installer wizard (installer/splat2mesh.iss) and by the app's Components page; also by hand:
 
     python -m splat2mesh.winsetup status                    # JSON: what is installed, the GPU, the options
-    python -m splat2mesh.winsetup install athenea idol eneas iris [--hf-token-env HF_TOKEN] [--vae klein|dev]
+    python -m splat2mesh.winsetup install athenea idol eneas iris [--hf-token-env HF_TOKEN] [--vae klein|dev] [--optix]
                                           [--iris-mode cpu-encoder|gpu|space]
     python -m splat2mesh.winsetup options --deepseek-key-env DEEPSEEK_API_KEY --iris-mode cpu-encoder
 
@@ -38,6 +38,10 @@ from .config import ROOT, TOOLS, WINDOWS, venv_python
 
 ATHENEA_URL = "https://github.com/jesusluque/athenea/releases/download/v0.4.0/athenea-0.4.0-windows-x64.zip"
 ATHENEA_SHA256 = "7c0a8ce9e9a9193c68c250bbc97e4a430c7dbab8dae15614435e8e6ef8714796"
+# OptiX headers, only when the user asks for them (--optix): athenea's path tracer on CUDA needs them, and they come
+# under NVIDIA's SDK licence (click-through; commercial use must be notified to NVIDIA), not a permissive one. Without
+# them athenea runs on Vulkan, which path traces as well (no denoiser there; config.athenea_env picks the backend).
+OPTIX_URL = "https://github.com/NVIDIA/optix-dev/archive/refs/tags/v9.0.0.zip"
 UV_URL = "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip"
 IDOL_GIT = "https://github.com/speridlabs/idol-sdk.git"
 ENEAS_GIT = "https://github.com/speridlabs/eneas.git"
@@ -204,7 +208,7 @@ def write_user_config(updates: dict):
 
 
 # ------------------------------------------------------------------------------------------------- components
-def install_athenea():
+def install_athenea(optix: bool = False):
     c = "athenea"
     z = download(ATHENEA_URL, TOOLS / "downloads" / Path(ATHENEA_URL).name, c, 0, 85, ATHENEA_SHA256)
     dst = TOOLS / "athenea"
@@ -235,10 +239,25 @@ def install_athenea():
     for old in exe.parent.glob("nvrtc-builtins64_*.dll"):
         if keep and old.name not in keep:
             old.unlink()
+    if optix:
+        install_optix(c)
     progress(95, c, "checking")
     run([exe, "info"], c, check=False, env={"CUDA_PATH": str(cu)})
     write_user_config({"athenea": {"bin": str(exe)}})
     progress(100, c, f"ready: {exe}")
+
+
+def install_optix(c: str = "athenea"):
+    """NVIDIA's OptiX headers (optix-dev, headers only) into tools/optix/include, for athenea on CUDA."""
+    progress(93, c, "OptiX headers from NVIDIA (path tracing on CUDA, NVIDIA's SDK licence)")
+    oz = download(OPTIX_URL, TOOLS / "downloads" / "optix-dev-9.0.0.zip", c, 93, 94)
+    ox = TOOLS / "optix"
+    shutil.rmtree(ox, ignore_errors=True)
+    with zipfile.ZipFile(oz) as zf:
+        for n in zf.namelist():                  # optix-dev-9.0.0/include/... → tools/optix/include/...
+            parts = n.split("/", 1)
+            if len(parts) == 2 and parts[1].startswith(("include/", "LICENSE")) and not n.endswith("/"):
+                f = ox / parts[1]; f.parent.mkdir(parents=True, exist_ok=True); f.write_bytes(zf.read(n))
 
 
 def install_idol(vae: str = "klein", dinov3_dir: str | None = None):
@@ -363,6 +382,8 @@ def main():
     sp.add_parser("status")
     i = sp.add_parser("install"); i.add_argument("components", nargs="+", choices=COMPONENTS + ("all",))
     i.add_argument("--vae", default="klein", choices=list(VAE))
+    i.add_argument("--optix", action="store_true", help="athenea: also NVIDIA's OptiX headers (path tracing on CUDA "
+                   "with the OIDN denoiser; NVIDIA's SDK licence, commercial use must be notified to NVIDIA)")
     i.add_argument("--iris-mode", default="cpu-encoder", choices=["cpu-encoder", "gpu", "space"])
     i.add_argument("--dinov3-dir", help="a local DINOv3 folder (config.json + model.safetensors) instead of the gated download")
     i.add_argument("--hf-token-file", help="a file with a Hugging Face token: read, deleted, used for the downloads")
@@ -396,7 +417,7 @@ def main():
     failed = []
     for comp in comps:
         try:
-            {"athenea": install_athenea, "idol": lambda: install_idol(a.vae, a.dinov3_dir), "eneas": install_eneas,
+            {"athenea": lambda: install_athenea(a.optix), "idol": lambda: install_idol(a.vae, a.dinov3_dir), "eneas": install_eneas,
              "iris": lambda: install_iris(a.iris_mode)}[comp]()
         except Exception as e:
             print(f"FAILED {comp}: {e}", flush=True); failed.append(comp)

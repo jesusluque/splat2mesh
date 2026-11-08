@@ -230,7 +230,7 @@ async function refreshStatus() {
   if (g.vram_gb && g.vram_gb < 15) $("#iris_mode_inst").value = "cpu-encoder";
 }
 async function install(components) {
-  await api("/api/jobs", { kind: "install", components, vae: $("#vae").value, iris_mode: $("#iris_mode_inst").value, hf_token: $("#hf_token").value.trim() || undefined });
+  await api("/api/jobs", { kind: "install", components, vae: $("#vae").value, optix: $("#optix").checked, iris_mode: $("#iris_mode_inst").value, hf_token: $("#hf_token").value.trim() || undefined });
   show("jobs");
 }
 $("#install_all").onclick = () => {

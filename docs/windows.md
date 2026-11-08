@@ -96,7 +96,10 @@ silent installer waiting on its own progress page.
 
 ## Limits on Windows
 
-- athenea runs on CUDA (OIDN denoiser, OptiX). If CUDA cannot open it falls back to D3D12, which has no denoiser;
-  `athenea info` says which backend it took.
+- athenea path traces on Vulkan by default. On CUDA it uses OptiX and the OIDN denoiser, but OptiX's headers come
+  under NVIDIA's SDK licence (not open source; commercial use must be notified to NVIDIA), so they are an optional
+  component (`--optix`). On an L4, 4 path traced frames of the lantern at 32 samples: Vulkan 32 s, CUDA 72 s with
+  the first shader compile; at that sample count the two look the same. Set `[athenea] backend` in the config to
+  choose (`vulkan`, `cuda`, or a list such as `cuda,vulkan`).
 - Idol runs without `torch.compile` on Windows (about 1.7 times slower sampling than on Linux).
 - The first ENEAS segmentation downloads its weights (~9 GB).
