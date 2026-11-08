@@ -88,13 +88,15 @@ UVs, texture and materials), the turntables, and `results.json`.
   installed beforehand: all components, Idol with four seeds, the app driven through its HTTP API.
 
 Problems found there and fixed: the output of a pipe in the ANSI code page (now UTF-8 everywhere), a job folder
-name with a drive letter's colon, athenea 0.3.0 without `stage --turntable` (renders one view a run), no ffmpeg
+name with a drive letter's colon, athenea 0.3.0 without `stage --turntable` (renders one view a run; 0.4.0 has
+it), athenea 0.4.0's CUDA 12.6 runtime against the 12.9 nvrtc (no CUDA device, so no denoiser: the installer
+puts the wheels' runtime next to athenea), no ffmpeg
 (taken from `imageio-ffmpeg`), no nvrtc for athenea (NVIDIA's wheels), Iris's git-only training dependency, and the
 silent installer waiting on its own progress page.
 
 ## Limits on Windows
 
-- The athenea release used (0.3.0) has no `splat-transfer`, so the refracting glass for the web is not made there;
-  path traced renders (`technique rt`) refract with what it has.
+- athenea runs on CUDA (OIDN denoiser, OptiX). If CUDA cannot open it falls back to D3D12, which has no denoiser;
+  `athenea info` says which backend it took.
 - Idol runs without `torch.compile` on Windows (about 1.7 times slower sampling than on Linux).
 - The first ENEAS segmentation downloads its weights (~9 GB).

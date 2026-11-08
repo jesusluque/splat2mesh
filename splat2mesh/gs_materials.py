@@ -4,7 +4,8 @@ The mesh-based flow (materials.render_orbit + from_view_masks) runs ENEAS on ren
 per texel. Few texels are hit directly (a 768 px orbit frame covers a 4096² atlas sparsely: ~6 % on a figurine), so
 most texels get their class from colour regions. Here:
 
-  1. render_orbit_gs: the splat is rendered with athenea (`render --splats`) on a 16-view orbit, on white, with
+  1. render_orbit_gs: the splat is rendered with athenea (`render --splats`) on a 16-view orbit, on mid grey (white or
+     frosted parts, such as a milky glass chimney, vanish on white), with
      depth; cameras in OpenCV convention (cameras.json) like the render path.
   2. ENEAS segments and tracks the phrases on those frames (scripts/materials_eneas3d.py --gs).
   3. vote_gaussians: every gaussian centre is projected into every view; where it is the visible surface (its depth
@@ -48,8 +49,11 @@ def _gaussians(ply, y_down=True):
     return v, xyz, alpha
 
 
+ORBIT_BG = 0.5          # the orbit frames' background: neutral grey, so white and black parts both stand out
+
+
 def render_orbit_gs(ply, out_dir, n: int = 16, elevation: float = 15.0, y_down: bool = True) -> list[Path]:
-    """athenea renders of the splat on an orbit; returns the white-background frames (JPEG) for ENEAS."""
+    """athenea renders of the splat on an orbit; returns the grey-background frames (JPEG) for ENEAS."""
     out = Path(out_dir); (out / "views").mkdir(parents=True, exist_ok=True); (out / "frames").mkdir(exist_ok=True)
     frames = [out / "frames" / f"f{i:02d}.jpg" for i in range(n)]
     if all(f.exists() for f in frames) and (out / "cameras.json").exists():
@@ -76,7 +80,7 @@ def render_orbit_gs(ply, out_dir, n: int = 16, elevation: float = 15.0, y_down: 
             fo.write(" ".join([vv["name"]] + [f"{x:.7g}" for x in vv["eye"] + vv["target"] + vv["up"]]) + "\n")
     from .athenea import render_splats
     render_splats(ply, [(vv["name"], vv["eye"], vv["target"], vv["up"]) for vv in views], out, size=SIZE,
-                  rotate_x180=y_down, background=(1.0, 1.0, 1.0))
+                  rotate_x180=y_down, background=(ORBIT_BG,) * 3)
     for vv, fr in zip(views, frames):
         Image.open(out / "views" / f"{vv['name']}.png").convert("RGB").save(fr, quality=95)
     return frames
