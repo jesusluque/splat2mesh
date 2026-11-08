@@ -90,6 +90,8 @@ def text2image(job, out: Path, log: Path, prog) -> Path:
     mode = t.get("mode", "auto")
     if mode == "auto":
         mode = cfg("iris.mode") or "gpu"
+        if mode != "space" and not (Path(cfg("iris.dir")) / "weights" / "turbo").exists():
+            mode = "space"                      # Iris-3B not installed here: the online Space
     png = out / "input.png"
     prog("picture", 0.05, f"Iris-3B Turbo ({mode})")
     if mode == "space":

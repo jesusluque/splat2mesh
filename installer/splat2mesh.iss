@@ -170,7 +170,18 @@ begin
   else
     Result := 'space';
   end;
-  if not WizardIsComponentSelected('iris') then Result := 'space';
+  { without the Iris component the setting is left as it is (an upgrade of other parts must not reset it) }
+  if not WizardIsComponentSelected('iris') then Result := '';
+end;
+
+function IrisModeText: String;
+begin
+  if IrisMode <> '' then Result := IrisMode else Result := 'not installed now (setting unchanged)';
+end;
+
+function IrisArg: String;
+begin
+  if IrisMode <> '' then Result := ' --iris-mode ' + IrisMode else Result := '';
 end;
 
 function Vae: String;
@@ -182,7 +193,7 @@ function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoType
   MemoGroupInfo, MemoTasksInfo: String): String;
 begin
   Result := MemoDirInfo + NewLine + NewLine + MemoComponentsInfo + NewLine + NewLine
-    + 'Options:' + NewLine + Space + 'Idol VAE: ' + Vae + NewLine + Space + 'Iris-3B: ' + IrisMode + NewLine
+    + 'Options:' + NewLine + Space + 'Idol VAE: ' + Vae + NewLine + Space + 'Iris-3B: ' + IrisModeText + NewLine
     + Space + 'GPU: ' + GpuName + NewLine + NewLine
     + 'The components download several GB; this takes from minutes to about an hour.';
 end;
@@ -245,10 +256,10 @@ begin
     begin
       SaveStringToFile(ExpandConstant('{tmp}\ds.txt'), Tok, False);
       RunStep('Saving the DeepSeek key', Py, '-m splat2mesh.winsetup options --deepseek-key-file "'
-        + ExpandConstant('{tmp}\ds.txt') + '" --iris-mode ' + IrisMode, 120, 130);
+        + ExpandConstant('{tmp}\ds.txt') + '"' + IrisArg, 120, 130);
     end
     else
-      RunStep('Options', Py, '-m splat2mesh.winsetup options --iris-mode ' + IrisMode, 120, 130);
+      RunStep('Options', Py, '-m splat2mesh.winsetup options' + IrisArg, 120, 130);
 
     N := 0; SetArrayLength(List, 4);
     if WizardIsComponentSelected('athenea') then begin List[N] := 'athenea'; N := N + 1; end;
@@ -259,7 +270,7 @@ begin
     for I := 0 to N - 1 do
     begin
       Lo := 130 + I * Span;
-      Comps := '-u -m splat2mesh.winsetup install ' + List[I] + ' --vae ' + Vae + ' --iris-mode ' + IrisMode;
+      Comps := '-u -m splat2mesh.winsetup install ' + List[I] + ' --vae ' + Vae + IrisArg;
       if (List[I] = 'athenea') and WizardIsComponentSelected('athenea\optix') then
         Comps := Comps + ' --optix';
       if (List[I] = 'idol') and (Trim(KeysPage.Values[2]) <> '') then
