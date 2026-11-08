@@ -85,7 +85,8 @@ UVs, texture and materials), the turntables, and `results.json`.
 - On an RTX 3070 Laptop (8 GB, Windows 11): the installer, athenea, Idol (picture → splat → turntable in about four
   minutes), ENEAS natively (its masks match the WSL ones: IoU 0.98–1.00 on all 16 views of the test object).
 - On a clean Windows Server 2022 with an NVIDIA L4 (24 GB), from the installer with no git, Python or CUDA Toolkit
-  installed beforehand: all components, Idol with four seeds, the app driven through its HTTP API.
+  installed beforehand: all components, Idol with four seeds, the app driven through its HTTP API; then an
+  upgrade over it (0.5.1, silent, `/TYPE=render`) that keeps the settings of the parts it does not reinstall.
 
 Problems found there and fixed: the output of a pipe in the ANSI code page (now UTF-8 everywhere), a job folder
 name with a drive letter's colon, athenea 0.3.0 without `stage --turntable` (renders one view a run; 0.4.0 has
