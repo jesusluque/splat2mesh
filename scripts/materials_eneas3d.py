@@ -169,19 +169,23 @@ for k in list(masks):
 # crystal" of a watch): the description lists the main parts first, so the later one is dropped (colour priors
 # can still claim its class)
 METAL_HUE_TOL = 30.0      # degrees of Lab hue between a coloured metal and the pixels its mask covers
+SKIN_MIN_CHROMA = 7.0     # a skin mask whose median colour is greyer than this lies on cloth (white sleeves)
 _frames_px = None
 
 
 def _metal_off_colour(k, m) -> bool:
-    """A coloured metal phrase whose mask's median colour has another hue (brass mask on brown leather)."""
+    """A phrase whose mask is not its material's colour: a coloured metal with another hue (a brass mask on brown
+    leather), or skin on white or grey pixels (the arms' mask on the sleeves of a white blouse)."""
     global _frames_px
     from splat2mesh.materials import _lib as _lb, _srgb_to_lab
-    f0 = _lb(k.split("|")[0]).get("f0")
-    if not f0:
+    cls = k.split("|")[0]
+    f0 = _lb(cls).get("f0")
+    if not f0 and cls != "skin":
         return False
-    fl = _srgb_to_lab(np.asarray([f0], np.float32))[0]
-    if np.hypot(fl[1], fl[2]) < 15:                 # silver, steel, chrome: no hue to compare
-        return False
+    if f0:
+        fl = _srgb_to_lab(np.asarray([f0], np.float32))[0]
+        if np.hypot(fl[1], fl[2]) < 15:             # silver, steel, chrome: no hue to compare
+            return False
     if _frames_px is None:
         _frames_px = np.stack([np.asarray(Image.open(f).convert("RGB").resize(m.shape[1:][::-1]), np.float32) / 255
                                for f in frames])
@@ -189,6 +193,8 @@ def _metal_off_colour(k, m) -> bool:
     if len(px) < 50:
         return False
     lab = np.median(_srgb_to_lab(px), 0)
+    if cls == "skin":                               # skin of any tone has some chroma (measured: 11 to 26)
+        return bool(np.hypot(lab[1], lab[2]) < SKIN_MIN_CHROMA)
     if np.hypot(lab[1], lab[2]) < 8:                # grey pixels: a dark or blown-out metal, no evidence
         return False
     d = abs((math.degrees(math.atan2(lab[2], lab[1])) - math.degrees(math.atan2(fl[2], fl[1])) + 180) % 360 - 180)
@@ -204,8 +210,8 @@ for ia, a_ in enumerate(nz):
         iou = (masks[a_] & masks[b_]).sum() / max((masks[a_] | masks[b_]).sum(), 1)
         if iou > SAME_MASK_IOU:
             keep_, drop_ = a_, b_
-            # a coloured metal (brass, gold, copper) whose mask is not its colour is the mislocated one ("the
-            # corset buckles" on the brown leather pouches), whichever comes first in the description
+            # a phrase whose mask is not its material's colour is the mislocated one ("the corset buckles" on the
+            # brown leather pouches, "the arms" on white sleeves), whichever comes first in the description
             if _metal_off_colour(a_, masks[a_]) and not _metal_off_colour(b_, masks[b_]):
                 keep_, drop_ = b_, a_
             print(f"dropped (same mask as {keep_}, IoU {iou:.2f}):", drop_)

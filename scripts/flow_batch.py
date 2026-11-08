@@ -41,6 +41,7 @@ from splat2mesh.describe import complete_parts, describe_ds, part_materials_from
 from splat2mesh.materials import LIB
 DESCRIBED_BY = {}
 need = [d for d in items if not (out / d.name / "materials.txt").exists()]
+fresh = {d.name for d in need}     # described in this run; a list already there (by hand, or the splat's) is kept as is
 for d in list(need):
     try:
         (out / d.name / "materials.txt").write_text(describe_ds(d / "idol_input.png", prompts[int(d.name)]))
@@ -60,7 +61,7 @@ if need:
 # 2b) the generation prompt is the better authority on WHICH metal/wood/glass: swap the VLM's generic family
 #     member for the specific one the prompt names ("gold" → "brass" when the prompt says brass)
 from splat2mesh.materials import LIB, lookup
-for d in items:
+for d in [d for d in items if d.name in fresh]:
     f = out / d.name / "materials.txt"
     pr = prompts[int(d.name)].lower(); desc = f.read_text()
     import re
