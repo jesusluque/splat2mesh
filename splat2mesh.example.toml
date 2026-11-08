@@ -5,6 +5,7 @@
 [athenea]
 bin = ""            # athenea executable; default: third_party/athenea/build/*/bin/athenea, then $PATH
 shaders = ""        # ATHENEA_SHADER_DIR; default: <build>/shaders
+backend = ""        # ATHENEA_BACKEND: cuda, vulkan, d3d12, metal or a list; default on Windows: vulkan
 
 [gpu]
 lock = ""           # optional script that serialises GPU jobs: runs as  bash LOCK COMMAND...

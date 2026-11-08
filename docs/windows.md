@@ -89,17 +89,17 @@ UVs, texture and materials), the turntables, and `results.json`.
 
 Problems found there and fixed: the output of a pipe in the ANSI code page (now UTF-8 everywhere), a job folder
 name with a drive letter's colon, athenea 0.3.0 without `stage --turntable` (renders one view a run; 0.4.0 has
-it), athenea 0.4.0's CUDA 12.6 runtime against the 12.9 nvrtc (no CUDA device, so no denoiser: the installer
-puts the wheels' runtime next to athenea), no ffmpeg
+it), athenea 0.4.0's CUDA runtime against another nvrtc version and OIDN only on CUDA (both fixed in athenea 0.4.1,
+which carries its own runtime and denoises on Vulkan), no ffmpeg
 (taken from `imageio-ffmpeg`), no nvrtc for athenea (NVIDIA's wheels), Iris's git-only training dependency, and the
 silent installer waiting on its own progress page.
 
 ## Limits on Windows
 
-- athenea path traces on Vulkan by default. On CUDA it uses OptiX and the OIDN denoiser, but OptiX's headers come
-  under NVIDIA's SDK licence (not open source; commercial use must be notified to NVIDIA), so they are an optional
-  component (`--optix`). On an L4, 4 path traced frames of the lantern at 32 samples: Vulkan 32 s, CUDA 72 s with
-  the first shader compile; at that sample count the two look the same. Set `[athenea] backend` in the config to
-  choose (`vulkan`, `cuda`, or a list such as `cuda,vulkan`).
+- athenea (0.4.1) runs on Vulkan by default, path traced with the OIDN denoiser, with nothing else installed: on
+  an L4, 4 frames at 64 samples take 10 s path traced and 3 s in raster. CUDA (OptiX) needs NVIDIA's OptiX
+  headers, which come under NVIDIA's SDK licence (not open source; commercial use must be notified to NVIDIA), so
+  they are an optional component (`--optix`). `[athenea] backend` in the config chooses (`vulkan`, `cuda`, or a
+  list such as `cuda,vulkan`).
 - Idol runs without `torch.compile` on Windows (about 1.7 times slower sampling than on Linux).
 - The first ENEAS segmentation downloads its weights (~9 GB).

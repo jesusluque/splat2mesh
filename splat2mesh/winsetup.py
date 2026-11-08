@@ -34,10 +34,10 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from .config import ROOT, TOOLS, WINDOWS, venv_python
+from .config import ROOT, TOOLS, WINDOWS, athenea_env, venv_python
 
-ATHENEA_URL = "https://github.com/jesusluque/athenea/releases/download/v0.4.0/athenea-0.4.0-windows-x64.zip"
-ATHENEA_SHA256 = "7c0a8ce9e9a9193c68c250bbc97e4a430c7dbab8dae15614435e8e6ef8714796"
+ATHENEA_URL = "https://github.com/jesusluque/athenea/releases/download/v0.4.1/athenea-0.4.1-windows-x64.zip"
+ATHENEA_SHA256 = "718852d4b28777d426d84a34bb2fe8cb5002f3dd728f2bd5ff530b9300e62a06"
 # OptiX headers, only when the user asks for them (--optix): athenea's path tracer on CUDA needs them, and they come
 # under NVIDIA's SDK licence (click-through; commercial use must be notified to NVIDIA), not a permissive one. Without
 # them athenea runs on Vulkan, which path traces as well (no denoiser there; config.athenea_env picks the backend).
@@ -218,32 +218,14 @@ def install_athenea(optix: bool = False):
     exe = next(dst.rglob("athenea.exe"), None)
     if exe is None:
         raise RuntimeError("athenea: athenea.exe not found in the release")
-    # athenea compiles its CUDA shaders at run time with NVIDIA's nvrtc, part of the CUDA Toolkit, which a clean
-    # Windows does not have: NVIDIA's own redistributable wheels give nvrtc, the runtime and the headers, laid out
-    # as a minimal CUDA folder (athenea_env points CUDA_PATH at it)
-    progress(90, c, "CUDA compiler for athenea's shaders (nvrtc, ~100 MB)")
-    pk, cu = TOOLS / "cuda-pkgs", TOOLS / "cuda"
-    run([uv(), "pip", "install", "--quiet", "--target", pk, "nvidia-cuda-nvrtc-cu12", "nvidia-cuda-runtime-cu12",
-         "nvidia-nvjitlink-cu12"], c)
-    (cu / "bin").mkdir(parents=True, exist_ok=True); (cu / "include").mkdir(exist_ok=True)
-    for dll in pk.rglob("*.dll"):
-        shutil.copy2(dll, cu / "bin" / dll.name)
-    for inc in [d for d in pk.rglob("include") if d.is_dir()]:
-        shutil.copytree(inc, cu / "include", dirs_exist_ok=True)
-    # athenea's own CUDA runtime must be the same version as the nvrtc it finds through CUDA_PATH: the 0.4.0 zip
-    # carries 12.6 and, against the wheels' 12.9, no CUDA device opens (it falls back to D3D12, which has no
-    # denoiser). The wheels' DLLs replace the zip's, and nvrtc builtins of another version are removed.
-    for dll in (cu / "bin").glob("*.dll"):
-        shutil.copy2(dll, exe.parent / dll.name)
-    keep = {p.name for p in (cu / "bin").glob("nvrtc-builtins64_*.dll")}
-    for old in exe.parent.glob("nvrtc-builtins64_*.dll"):
-        if keep and old.name not in keep:
-            old.unlink()
+    # the release carries its own CUDA runtime, nvrtc and headers (0.4.1) and points CUDA_PATH at itself; a folder
+    # of NVIDIA wheels from an earlier install would only mix versions, so it goes
+    shutil.rmtree(TOOLS / "cuda", ignore_errors=True); shutil.rmtree(TOOLS / "cuda-pkgs", ignore_errors=True)
     if optix:
         install_optix(c)
-    progress(95, c, "checking")
-    run([exe, "info"], c, check=False, env={"CUDA_PATH": str(cu)})
     write_user_config({"athenea": {"bin": str(exe)}})
+    progress(95, c, "checking")
+    run([exe, "info"], c, check=False, env=athenea_env())
     progress(100, c, f"ready: {exe}")
 
 

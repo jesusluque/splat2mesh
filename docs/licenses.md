@@ -15,7 +15,6 @@ All permissive:
 | usd-core | Tomorrow Open Source Technology License 1.0 (Apache-2.0 based) |
 | OpenEXR | BSD-3-Clause |
 | imageio-ffmpeg | BSD-2-Clause; the ffmpeg executable it ships is a GPL build, run as a separate program to encode the videos (only where no ffmpeg is on the PATH, e.g. Windows) |
-| NVIDIA CUDA runtime and nvrtc (`nvidia-cuda-*-cu12` wheels, Windows) | NVIDIA's CUDA EULA, which allows redistributing these runtime libraries with an application; downloaded by the installer next to athenea |
 | NVIDIA OptiX headers (`optix-dev`, Windows, **optional**) | NVIDIA's SDK licence: not open source, commercial use must be notified to NVIDIA. Only downloaded when chosen (`winsetup install athenea --optix`, the installer's component, the app's checkbox); without them athenea path traces on Vulkan |
 
 PLY files are read and written by `splat2mesh/ply.py`; the GPL-licensed `plyfile` package is no longer used.

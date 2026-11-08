@@ -45,10 +45,6 @@ minutes; it needs Iris-3B installed locally (with its restorer, +12 GB).
 
 <img src="img/detail_pass.jpg" width="100%">
 
-<img src="img/detail_pass_idol.jpg" width="100%">
-
-*The splat Idol makes: left from the original picture, right after the detail pass.*
-
 **3. 3D** — Idol's seeds and the number of gaussians. With more than one seed, each sample is rendered from four
 sides with athenea and scored by DeepSeek against the picture, and the best is kept
 ([multiview.md](multiview.md)).

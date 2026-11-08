@@ -33,7 +33,8 @@ DEFAULTS = {
     "athenea": {
         "bin": "",               # athenea executable; empty: third_party/athenea build, then $PATH
         "shaders": "",           # ATHENEA_SHADER_DIR; empty: <build>/shaders next to the binary's bin/
-    },
+        "backend": "",           # ATHENEA_BACKEND (cuda, vulkan, d3d12, metal, or a list); empty: Windows picks
+    },                           # vulkan, or cuda,vulkan with OptiX headers; elsewhere athenea's own default
     "gpu": {"lock": ""},         # command prefix that serialises GPU jobs on this machine (e.g. a lock script)
     "idol": {
         "host": "local",         # "local" or an ssh host with CUDA
@@ -131,8 +132,6 @@ def athenea_env() -> dict:
                 sh = str(d); break
     if sh:
         env["ATHENEA_SHADER_DIR"] = os.path.expanduser(sh)
-    if WINDOWS and not env.get("CUDA_PATH") and (TOOLS / "cuda" / "bin").exists():
-        env["CUDA_PATH"] = str(TOOLS / "cuda")         # nvrtc for athenea's shaders, from the installer
     # Windows: CUDA (OptiX ray tracing, OIDN denoiser) needs NVIDIA's OptiX headers, installed only on request
     # (winsetup --optix, NVIDIA's licence); without them athenea runs on Vulkan, which path traces too
     if WINDOWS and (TOOLS / "optix" / "include" / "optix.h").exists():
