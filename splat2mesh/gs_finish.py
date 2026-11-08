@@ -172,13 +172,17 @@ def finish(ply, orbit_dir, y_down: bool = True) -> dict:
                                         for j in np.nonzero(hl)[0]])
         patterned, tint = False, None
         if L.get("transmission", 0) > 0:
-            patterned = spread > GLASS_PATTERN_SPREAD
+            from .materials import SMOKED_MAX_T
+            smoked = np.median(_lin(srgb[s]), 0).max() < SMOKED_MAX_T     # near black: hue spread is noise
+            patterned = spread > GLASS_PATTERN_SPREAD and not smoked
             if patterned:
                 trans[s] *= 0.5
             else:
                 # the more opaque half: less of the background seen through it
                 strong = alpha[s] > np.percentile(alpha[s], 50)
-                tint = np.median(_lin(srgb[s][strong]), 0); tint = tint / max(tint.max(), 1e-4) * 0.95
+                from .materials import glass_tint
+                # Idol's colour was seen over its own (white) input background; dark here means smoked glass
+                tint = glass_tint(np.median(_lin(srgb[s][strong]), 0), 1.0)
                 # a thin wall: the shell's two walls share the tint; a solid: the tint at each of its two
                 # crossings, which is what the captured colour looks like through the whole piece
                 base[s] = _srgb(tint ** (1.0 / GLASS_WALLS) if L.get("thin_walled", False) else tint)[None]

@@ -117,7 +117,12 @@ decided in this order:
 3. **Otherwise the smallest claimant** wins.
 
 The cluster sheet is saved as `mat/overlap_clusters.jpg`. Without a DeepSeek key this step is skipped and the
-sanity rules below handle overlaps.
+sanity rules below handle overlaps, after one split by colour: parts of different materials whose masks are nearly
+the same (IoU above 0.9; on a head, "the face" and "the red hair" both on the whole head, or the goggles' frame,
+lenses and strap all on the whole goggles) keep the pixels only one of them claims, and share the rest by colour.
+Those pixels are clustered in Lab, and each cluster goes to the part whose colour is nearest: a colour word in the
+phrase ("red", "black", "gold"…), else its material's own colour (brass, skin), within ΔE 40. A cluster near no
+named colour goes to the first part with no colour (the lenses), or to no part, and its neighbours' votes decide.
 
 ## 4. Sanity rules (segmenter mistakes)
 
@@ -185,6 +190,9 @@ F0 colour, transmission, subsurface, thin-walled and match keywords. Values are 
 
 - One-colour glass (clear, blue, green): one uniform tint. A ray crosses two walls of a glass shell, so the colour
   per wall is the measured tint to the power 1/2.
+- Smoked glass (goggles, sunglasses): its captured colour is under a tenth of the background seen through it
+  (measured: goggles lenses 0.006, clear bulbs 0.4 to 0.74), so the tint keeps that darkness instead of only the hue,
+  and it is never taken as patterned (the hue spread of near-black pixels is noise).
 - Multi-coloured glass (Tiffany shades, stained glass) keeps its baked colours with half transmission. A glass is
   multi-coloured when the spread of its texels in Lab a\*b\* is above 12 (single-colour glass measured 0.5–5.7,
   stained glass 15–20).

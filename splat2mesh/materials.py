@@ -57,6 +57,21 @@ DARK_METAL_CHROMA = 10.0     # is greyer than this is blackened or painted metal
                              # not a reflection (a brass frame's dark reflections keep its hue: chroma 25)
 
 
+SMOKED_MAX_T = 0.1         # smoked glass: captured colour under this × the background (measured: smoked goggles 0.006; clear bulbs 0.4-0.74)
+
+
+def glass_tint(med_lin, bg_lin: float):
+    """A uniform glass's tint (linear RGB transmittance) from its median captured colour over a background of
+    linear value bg_lin. Clear glass: the captured brightness is frozen background and reflections, so only the hue
+    is kept (max 0.95). Smoked glass (goggles, sunglasses: much darker than the background seen through it) keeps
+    its darkness: the ratio to the background is what it lets through."""
+    med = np.asarray(med_lin, np.float64)
+    T = med / max(bg_lin, 1e-4)
+    if T.max() < SMOKED_MAX_T:
+        return np.clip(T, 0.02, 0.95)
+    return med / max(med.max(), 1e-4) * 0.95
+
+
 def metal_f0(f0, lin_px: np.ndarray, lab_px: np.ndarray) -> np.ndarray:
     """The F0 to use for a metal part: the library's, or, for a dark colourless part (blackened iron, black paint
     on metal), the library's hue scaled to the part's own median luminance. lin_px: linear RGB [n, 3]; lab_px: Lab."""
@@ -1067,15 +1082,15 @@ def finish_maps(asset_dir, cls_tex, names, metal_detail: float = 0.35) -> dict:
         if trans > 0:      # glass: what the splat shows is mostly the background seen through it
             ab = _srgb_to_lab(base[sel])[:, 1:]
             spread = float(np.median(np.hypot(*(ab - np.median(ab, 0)).T)))   # hue diversity of the glass texels
-            patterned = spread > GLASS_PATTERN_SPREAD     # stained / multi-coloured glass: the colours are the object
+            smoked = np.median(lin(base[sel]), 0).max() < SMOKED_MAX_T   # near black: hue spread is noise
+            patterned = spread > GLASS_PATTERN_SPREAD and not smoked   # stained / multi-coloured glass: the colours are the object
             print(f"glass {cls}: colour spread {spread:.1f} → {'patterned (colour kept)' if patterned else 'uniform tint'}")
             if patterned:
                 trans = trans * 0.5                       # coloured glass lets less light through, shows its colours
             elif (asset / "glass_openings.npz").exists() and "tint" in np.load(asset / "glass_openings.npz").files:
                 tint = np.load(asset / "glass_openings.npz")["tint"].astype(np.float64)   # same glass as the panes
             else:
-                tint = np.median(lin(base[sel]), 0)
-                tint = tint / max(tint.max(), 1e-4) * 0.95        # keep the hue, drop the frozen brightness
+                tint = glass_tint(np.median(lin(base[sel]), 0), 1.0)   # the orbit is on white
                 base[sel] = srgb(tint)[None]
         T[sel] = trans; S[sel] = L.get("subsurface", 0.0)
         info[cls] = {"transmission": trans, "subsurface": L.get("subsurface", 0.0), "patterned": patterned,
@@ -1149,3 +1164,107 @@ def _usd_add_mtlx(usd_path: Path, has_t: bool, has_s: bool, ior: float = 1.5, th
     ss.CreateOutput("out", Sdf.ValueTypeNames.Token)
     mat.CreateSurfaceOutput("mtlx").ConnectToSource(ss.ConnectableAPI(), "out")
     stage.GetRootLayer().Save()
+
+
+# colour words a part's phrase may carry, as Lab; used only to name colour clusters when no vision model can
+COLOUR_WORDS = {
+    "red": (45, 45, 40), "ginger": (50, 35, 45), "auburn": (40, 30, 30), "orange": (62, 35, 60),
+    "yellow": (85, 0, 75), "blond": (75, 5, 35), "blonde": (75, 5, 35), "green": (50, -40, 30),
+    "blue": (45, 10, -45), "purple": (40, 40, -35), "pink": (72, 30, 5), "brown": (38, 15, 25),
+    "black": (14, 0, 0), "dark": (22, 0, 0), "white": (92, 0, 0), "grey": (55, 0, 0), "gray": (55, 0, 0),
+    "gold": (72, 5, 55), "golden": (72, 5, 55), "silver": (75, 0, 0),
+}
+SKIN_LAB = (68, 16, 20)
+SPLIT_MAX_DE = 40.0        # a colour cluster farther than this from every named colour goes to the unnamed phrases
+
+
+def _phrase_lab(key: str):
+    """The colour a phrase ("cls|the red hair") should have: a colour word in it, else its material's own colour
+    (a coloured metal's F0, skin), else None."""
+    import re
+    cls, ph = key.split("|", 1)
+    for w in re.findall(r"[a-z]+", ph.lower()):
+        if w in COLOUR_WORDS:
+            return np.array(COLOUR_WORDS[w], np.float32)
+    if cls == "skin":
+        return np.array(SKIN_LAB, np.float32)
+    f0 = _lib(cls).get("f0")
+    if f0:
+        f = np.asarray([f0], np.float32)
+        lab = _srgb_to_lab(np.where(f <= 0.0031308, f * 12.92, 1.055 * np.power(f, 1 / 2.4) - 0.055))[0]
+        if np.hypot(lab[1], lab[2]) >= 15:               # brass, gold, copper: a hue; steel and chrome: none
+            return lab.astype(np.float32)
+    return None
+
+
+def _kmeans(x: np.ndarray, k: int, iters: int = 20, seed: int = 0) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    c = x[rng.choice(len(x), k, replace=False)].copy()
+    for _ in range(iters):
+        lab = np.argmin(((x[:, None] - c[None]) ** 2).sum(-1), 1)
+        for j in range(k):
+            if (lab == j).any():
+                c[j] = x[lab == j].mean(0)
+    return c
+
+
+def split_shared_masks(masks: dict, frames: list, order: list, iou_min: float = 0.9):
+    """Phrases of different materials whose masks are nearly the same (IoU > iou_min, ENEAS could not tell them
+    apart) share the pixels they both claim by colour (a pixel only one of them claims stays with it: the eyes in
+    "the eyes" when that mask also took the goggles): those pixels are clustered in Lab (one cluster per phrase, plus one),
+    each cluster goes to the phrase whose colour (_phrase_lab) is nearest, within SPLIT_MAX_DE; clusters near no
+    named colour go to the first listed phrase with no colour, or to none. Returns (masks, groups split)."""
+    keys = [k for k in order if k in masks and masks[k].any()]
+    parent = {k: k for k in keys}
+
+    def root(k):
+        while parent[k] != k:
+            k = parent[k]
+        return k
+    for i, a in enumerate(keys):
+        for b in keys[i + 1:]:
+            if a.split("|")[0] == b.split("|")[0]:
+                continue
+            iou = (masks[a] & masks[b]).sum() / max((masks[a] | masks[b]).sum(), 1)
+            if iou > iou_min:
+                parent[root(b)] = root(a)
+    groups = {}
+    for k in keys:
+        groups.setdefault(root(k), []).append(k)
+    groups = [g for g in groups.values() if len(g) > 1 and len({k.split("|")[0] for k in g}) > 1]
+    if not groups:
+        return masks, []
+    shape = next(iter(masks.values())).shape
+    px = np.stack([np.asarray(Image.open(f).convert("RGB").resize(shape[1:][::-1]), np.float32) / 255
+                   for f in frames])
+    out = dict(masks)
+    report = []
+    for g in groups:
+        count = np.zeros(shape, np.int16)
+        for k in g:
+            count += masks[k]
+        union = count >= 2                                # claimed by several: decided by colour
+        if not union.any():
+            continue
+        lab = _srgb_to_lab(px[union]).astype(np.float32)
+        sample = lab[np.random.default_rng(0).choice(len(lab), min(len(lab), 200000), replace=False)]
+        cent = _kmeans(sample, min(len(g) + 1, len(sample)))
+        cl = np.argmin(((lab[:, None] - cent[None]) ** 2).sum(-1), 1)
+        targets = {k: _phrase_lab(k) for k in g}
+        named = [k for k in g if targets[k] is not None]
+        unnamed = [k for k in g if targets[k] is None]
+        owner = []
+        for c in cent:
+            d = {k: float(np.sqrt(((c - targets[k]) ** 2 * np.array([0.5, 1, 1])).sum())) for k in named}
+            best = min(d, key=d.get) if d else None
+            if best is not None and d[best] <= SPLIT_MAX_DE:
+                owner.append(best)
+            else:                    # near no named colour: an unnamed phrase's, or nobody's (shadows: the
+                owner.append(unnamed[0] if unnamed else None)    # neighbours' votes decide)
+        flat = np.flatnonzero(union.ravel())
+        for k in g:
+            m = np.zeros(union.size, bool)
+            m[flat[np.isin(cl, [j for j, o in enumerate(owner) if o == k])]] = True
+            out[k] = m.reshape(shape) | (masks[k] & (count == 1))
+        report.append({k: [np.round(cent[j]).astype(int).tolist() for j, o in enumerate(owner) if o == k] for k in g})
+    return out, report

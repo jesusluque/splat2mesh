@@ -154,6 +154,15 @@ def _obj_mask(f):
         return a > 127
     return np.asarray(Image.open(f).convert("L"), np.float32) < 250
 obj = np.stack([_obj_mask(f) for f in frames])
+if not _dskey() and len(masks) > 1:
+    # no DeepSeek to check the masks: phrases of different materials with the same mask ("the face" and "the red
+    # hair" both on the whole head, the goggles' frame, lenses and strap on the whole goggles) share it by colour
+    from splat2mesh.materials import split_shared_masks
+    _auto = {f"{c}|{t}" for c, t in auto_items}
+    masks, _split = split_shared_masks(masks, frames, [k for k in [f"{c}|{t}" for c, t in items] if k not in _auto],
+                                       SAME_MASK_IOU)
+    for g in _split:
+        print("split by colour (no DeepSeek key):", g, flush=True)
 first = f"{items[0][0]}|{items[0][1]}" if items else None
 for k in list(masks):
     if k == first:
