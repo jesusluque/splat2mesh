@@ -43,6 +43,11 @@ irises and eyebrows instead of smudged, and the shape from the side and the back
 (`scripts/sr_upscale.py`, through spandrel): they left faces smooth, and the Iris restorer is used. About four
 minutes; it needs Iris-3B installed locally (with its restorer, +12 GB).
 
+<img src="img/detail_head.jpg" width="100%">
+
+A head cut out of a full-figure picture and given the detail pass, as a mesh rendered with athenea (path traced):
+the eyes keep their irises and lashes, the goggles have smoked glass lenses in a brass frame.
+
 **3. 3D** — Idol's seeds and the number of gaussians. With more than one seed, each sample is rendered from four
 sides with athenea and scored by DeepSeek against the picture, and the best is kept
 ([multiview.md](multiview.md)).
