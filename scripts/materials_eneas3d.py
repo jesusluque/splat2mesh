@@ -168,6 +168,33 @@ for k in list(masks):
 # ENEAS could not tell two phrases of different materials apart (near-identical masks: "the case" and "the
 # crystal" of a watch): the description lists the main parts first, so the later one is dropped (colour priors
 # can still claim its class)
+METAL_HUE_TOL = 30.0      # degrees of Lab hue between a coloured metal and the pixels its mask covers
+_frames_px = None
+
+
+def _metal_off_colour(k, m) -> bool:
+    """A coloured metal phrase whose mask's median colour has another hue (brass mask on brown leather)."""
+    global _frames_px
+    from splat2mesh.materials import _lib as _lb, _srgb_to_lab
+    f0 = _lb(k.split("|")[0]).get("f0")
+    if not f0:
+        return False
+    fl = _srgb_to_lab(np.asarray([f0], np.float32))[0]
+    if np.hypot(fl[1], fl[2]) < 15:                 # silver, steel, chrome: no hue to compare
+        return False
+    if _frames_px is None:
+        _frames_px = np.stack([np.asarray(Image.open(f).convert("RGB").resize(m.shape[1:][::-1]), np.float32) / 255
+                               for f in frames])
+    px = _frames_px[m]
+    if len(px) < 50:
+        return False
+    lab = np.median(_srgb_to_lab(px), 0)
+    if np.hypot(lab[1], lab[2]) < 8:                # grey pixels: a dark or blown-out metal, no evidence
+        return False
+    d = abs((math.degrees(math.atan2(lab[2], lab[1])) - math.degrees(math.atan2(fl[2], fl[1])) + 180) % 360 - 180)
+    return d > METAL_HUE_TOL
+
+
 order = [f"{c}|{t}" for c, t in items]
 nz = [k for k in order if k in masks and masks[k].any()]
 for ia, a_ in enumerate(nz):
@@ -176,8 +203,13 @@ for ia, a_ in enumerate(nz):
             continue
         iou = (masks[a_] & masks[b_]).sum() / max((masks[a_] | masks[b_]).sum(), 1)
         if iou > SAME_MASK_IOU:
-            print(f"dropped (same mask as {a_}, IoU {iou:.2f}):", b_)
-            masks[b_] = np.zeros_like(masks[b_])
+            keep_, drop_ = a_, b_
+            # a coloured metal (brass, gold, copper) whose mask is not its colour is the mislocated one ("the
+            # corset buckles" on the brown leather pouches), whichever comes first in the description
+            if _metal_off_colour(a_, masks[a_]) and not _metal_off_colour(b_, masks[b_]):
+                keep_, drop_ = b_, a_
+            print(f"dropped (same mask as {keep_}, IoU {iou:.2f}):", drop_)
+            masks[drop_] = np.zeros_like(masks[drop_])
 # the material's own name ("the glass") only looks for panes the description did not list: it fills what no
 # described part claims, and is dropped when it spreads over much of the object (a reflection-wide guess)
 for c, t in auto_items:
