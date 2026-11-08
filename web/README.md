@@ -3,9 +3,8 @@
 `splat.html` — one relightable splat (`?model=NAME` reads `models/NAME.athc` and `models/NAME.json`), relit live under
 an HDRI with athenea's relighting code in Spark's WebGPU backend, the viewer of sparkwebgpu.lucab.co.uk
 (<https://github.com/jesusluque/sparkwebgpu-public>). It needs, next to it, `site.js`, `site.css` and `vendor/` from
-that project's published site (Spark, three.js, lil-gui: MIT). Its `site.js` signs the page footer; replace the
-personal address there with the public one before publishing:
-`sed -i '' 's/jesusluquemuriel@gmail.com/info@lucab.co.uk/g' site.js`.
+that project's published site (Spark, three.js, lil-gui: MIT). Its `site.js` signs the page footer with the
+contact address of the 3D sites, jesusluquemuriel@gmail.com (set by the user on 2026-11-08).
 
 Making the files for a model:
 
