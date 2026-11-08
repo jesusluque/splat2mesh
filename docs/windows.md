@@ -41,7 +41,7 @@ The installer copies the code, then installs each component with its own progres
 | Step | What | Where |
 |---|---|---|
 | Core | uv, Python 3.12, splat2mesh's packages | `tools\uv`, `tools\python`, `.venv` |
-| athenea | the published Windows release (exe, DLLs, shaders), checksum verified; NVIDIA's CUDA shader compiler (nvrtc) and headers from NVIDIA's redistributable wheels, since athenea compiles its shaders at run time and a clean Windows has no CUDA Toolkit | `tools\athenea`, `tools\cuda` |
+| athenea | the published Windows release (exe, DLLs, shaders, its own CUDA runtime and shader compiler), checksum verified; NVIDIA's OptiX headers only with `--optix` | `tools\athenea`, `tools\optix` |
 | Idol | the Idol SDK, PyTorch (CUDA 12.8), its weights, DINOv3, the VAE | `tools\idol-sdk`, Hugging Face cache |
 | ENEAS | ENEAS in its own environment (all its dependencies except `deepspeed`, which inference does not use); its weights (~9 GB) download on the first segmentation | `tools\eneas` |
 | Iris-3B | Iris-3B Turbo, its restorer (the detail pass) and Qwen3-VL-4B; installed without its training-only dependencies (`dion`, which needs git) | `tools\iris-3b`, Hugging Face cache |
@@ -91,7 +91,7 @@ Problems found there and fixed: the output of a pipe in the ANSI code page (now 
 name with a drive letter's colon, athenea 0.3.0 without `stage --turntable` (renders one view a run; 0.4.0 has
 it), athenea 0.4.0's CUDA runtime against another nvrtc version and OIDN only on CUDA (both fixed in athenea 0.4.1,
 which carries its own runtime and denoises on Vulkan), no ffmpeg
-(taken from `imageio-ffmpeg`), no nvrtc for athenea (NVIDIA's wheels), Iris's git-only training dependency, and the
+(taken from `imageio-ffmpeg`), no nvrtc for athenea (now in its release), Iris's git-only training dependency, and the
 silent installer waiting on its own progress page.
 
 ## Limits on Windows
