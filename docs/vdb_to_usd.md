@@ -115,7 +115,8 @@ athenea stage smoke2.usda --eye 0 1 6 --target 0 1 0 --up 0 1 0 --focal 50 --siz
 The camera values are an example: aim `--target` at the middle of your volume and set `--eye` far enough back to
 frame it. To compare, point `filePath` at `smoke2_back.vdb` (the gaussians given back) and render again from the same camera.
 To render the gaussians themselves, reference `smoke2_gs.usdc` in the stage in place of the `Volume`, with the same
-lights: athenea draws a `ParticleField` marked `athenea:splat:volume` as a medium.
+lights and `--technique raster`: athenea's raster draws a `ParticleField` marked `athenea:splat:volume` as a medium
+(the path tracer leaves it out). [The Fire Plume tutorial](vdb_fireplume.md) does this step by step.
 
 athenea's raster draws a medium of 50,000 gaussians in 18 ms, where the path tracer takes 13.5 s on the original grid
 (Apple M5 Pro), within a relMSE of 0.025 of that path trace.

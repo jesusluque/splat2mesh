@@ -190,6 +190,7 @@ also writes `compare.png`, splat beside mesh, and a re-render PSNR).
 | [Tutorial: basics](docs/TUTORIAL_basics.md) | one object step by step: picture → splat → USD, the UV map, direct mode vs render path |
 | [Tutorial: materials](docs/TUTORIAL.md) | the full chain with automatic PBR materials, parts for compositing, web and video |
 | [Tutorial: OpenVDB → USD gaussians](docs/vdb_to_usd.md) | smoke and fire volumes to volumetric 3D gaussians in USD with athenea's `vdb2splat`, and back |
+| [Tutorial: a fire simulation → USD gaussians](docs/vdb_fireplume.md) | JangaFX's Fire Plume (250 frames, 10 GB of VDB) converted, lit, rendered and made into a film |
 | [Pipeline reference](docs/pipeline.md) | every stage, its parameters and the reasons behind the defaults |
 | [Materials reference](docs/materials.md) | how parts are found, the per-texel rules, the material library, glass |
 | [Multi-view and seed selection](docs/multiview.md) | more than one view of the object; choosing the best Idol sample with a vision validator |
