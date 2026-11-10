@@ -142,4 +142,4 @@ done
 ffmpeg -framerate 30 -i film/f_%04d.png -c:v libx264 -pix_fmt yuv420p -crf 18 fireplume_20k.mp4
 ```
 
-The film of the 250 frames at 20,000 gaussians is 3.7 MB as H.264 at 1280×720; a frame renders in well under a second.
+The film of the 250 frames at 20,000 gaussians is 3.7 MB as H.264 at 1280×720; the 250 frames rendered in 20 minutes, about 5 s each with athenea started anew for every frame.
