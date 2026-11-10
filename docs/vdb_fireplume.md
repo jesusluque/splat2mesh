@@ -103,23 +103,29 @@ view took 0.21 s, file written:
 ## 4. Convert the whole simulation
 
 ```sh
-athenea vdb2splat "firePlume_####.vdb" --sequence --frames 0 249 -n 20000 --temperature flames \
-  --device-mb 8192 -o "seq/f_####.usdc" --cloud "seq/f_####.ply"
+athenea vdb2splat "firePlume_####.vdb" --sequence --independent --frames 0 249 -n 20000 --temperature flames \
+  --device-mb 8192 -o "seq/f_####.usdc"
 ```
 
-- `-o` with a run of `#` writes one USD a frame; `--cloud` writes each frame as a 3DGS PLY as well, the input of
-  athenea's video encoder for streaming.
-- Each frame starts from the one before, its gaussians kept in their slots, as the first tutorial explains.
+- `-o` with a run of `#` writes one USD a frame.
+- `--independent` fits every frame from scratch. **For this simulation it is the mode to use.** Without it each frame
+  starts from the one before (the first tutorial's default, made for streaming), and here that came out worse on every
+  count:
+
+| 250 frames, 20,000 gaussians | `--independent` | Default (from the frame before) |
+|---|---|---|
+| Density error (mean relative L2) | 0.18 | 0.25 |
+| Flicker `vdb2splat` reports (mean) | 0.65 | 0.89 to 0.90 |
+| Fit, a frame | 6.6 s | 13 s |
+| In the picture | sharp on every frame | blurred, with needle-shaped gaussians |
+
+The default's numbers are from the 124 frames of its run that were logged (it ran in pieces). The whole simulation took
+28 minutes of fitting with `--independent`.
 
 | | OpenVDB | 20,000 gaussians (USD) |
 |---|---|---|
 | 250 frames | 10 GB | 315 MB |
 | One frame | 40 MB | 1.3 MB |
-
-The density error is 0.18 on the first frame and about 0.25 on the frames after it. A frame takes far longer than the
-small examples of the first tutorial: 4 s at the start and 13 s on average once the plume has grown, so about an hour
-for the 250 with the GPU to itself. Give a long job room: this run was stopped by its own time limit and finished in pieces (frames 0–60, 61–186
-and 187–249, each piece starting with a fresh fit), which a film does not show but a video codec would.
 
 ## 5. Make the film
 
@@ -135,3 +141,5 @@ for i in $(seq 0 249); do
 done
 ffmpeg -framerate 30 -i film/f_%04d.png -c:v libx264 -pix_fmt yuv420p -crf 18 fireplume_20k.mp4
 ```
+
+The film of the 250 frames at 20,000 gaussians is 3.7 MB as H.264 at 1280×720; a frame renders in well under a second.
