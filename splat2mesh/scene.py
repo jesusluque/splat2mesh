@@ -11,11 +11,13 @@ semi-transparent ones), so the opacity field itself has no clean level set. Here
      (transmittance 0.5): one definition for the whole room, evaluated on a lattice in tiles (CPU), open where the
      air sees no wall, with nothing filled or capped. A splat's rendered depths are not used for this: they are
      means over semi-transparent gaussians and differ from view to view;
-  4. small pieces go and the mesh is decimated into the LODs;
+  4. small pieces go, the room's large planes are made plane (what stands out of them stays) and the mesh is
+     decimated into the LODs;
   5. athenea renders the splat's colour from each station as a cube of wide views;
-  6. each LOD gets UVs by planar projection onto the room's planes (islands packed on shelves), a base colour
-     baked from the views that see each texel, and the detail the decimation lost as normal, height and occlusion
-     maps baked from the finest mesh.
+  6. each LOD gets UVs by planar projection onto the room's planes (islands packed on shelves, over several
+     UDIM tiles when the density asks), a base colour taken for every texel from the station that sees it best,
+     and the detail the decimation lost as normal, height and occlusion maps baked from the finest mesh. One
+     station is kept out of the bake: the mesh is compared with the splat's own views from it (PSNR, SSIM).
 """
 from __future__ import annotations
 
@@ -159,45 +161,55 @@ def render(ply, cams: dict, out: Path, batch: int = 18, log=print) -> None:
             athenea.exr_to_png(e, d / f"{v['name']}.png", (0, 0, 0))
 
 
-def load_views(out: Path, cams: dict, min_alpha: float = 0.3):
-    """The rendered views: colour (sRGB, un-premultiplied), coverage, cameras. Their depth is left empty: the
-    splat's own depth differs from view to view, so visibility is tested against the mesh (mesh_depth)."""
+def load_views(out: Path, cams: dict, min_alpha: float = 0.3) -> list[dict]:
+    """The rendered views grouped by station: [{"eye", "faces": [(rgb uint8 HxWx3 sRGB un-premultiplied, covered
+    HxW bool, R world→camera)] in CUBE's order, "K"}]. A station with a view missing is left out."""
     from .athenea import read_exr, _srgb
-    from .views import View
     it = cams["intrinsics"]
     K = np.array([[it["fx"], 0, it["cx"]], [0, it["fy"], it["cy"]], [0, 0, 1.0]])
-    views, names = [], []
-    for v in cams["views"]:
-        e = Path(out) / "views" / f"{v['name']}.exr"
-        if not e.exists():
+    out_st = []
+    for i in range(len(cams["views"]) // 6):
+        faces = []
+        for v in cams["views"][6 * i:6 * i + 6]:
+            e = Path(out) / "views" / f"{v['name']}.exr"
+            if not e.exists():
+                break
+            ch = read_exr(e)
+            if "RGBA" in ch:
+                rgb, a = ch["RGBA"][..., :3], ch["RGBA"][..., 3]
+            else:
+                rgb = ch["RGB"] if "RGB" in ch else np.stack([ch["R"], ch["G"], ch["B"]], -1)
+                a = ch.get("A", np.ones(rgb.shape[:2], np.float32))
+            col = (_srgb(rgb / np.maximum(a, 1e-6)[..., None]) * 255).round().astype(np.uint8)
+            faces.append((col, a > min_alpha, np.asarray(v["R_world_to_cam"], np.float64)))
+        if len(faces) == 6:
+            out_st.append({"eye": np.asarray(cams["views"][6 * i]["eye"], np.float64), "faces": faces, "K": K})
+    return out_st
+
+
+def _sample_station(st: dict, P):
+    """Colour a station sees at the points P (n×3): the cube face each direction falls in, bilinear.
+    Returns (rgb n×3 float 0..1, covered n bool)."""
+    d = P - st["eye"]
+    ax = np.argmax(np.abs(d), 1)
+    face = np.where(ax == 0, 0, np.where(ax == 2, 2, 4)) + (d[np.arange(len(d)), ax] < 0)      # CUBE's order
+    K = st["K"]
+    col = np.zeros((len(P), 3), np.float32)
+    ok = np.zeros(len(P), bool)
+    for j, (img, cov, R) in enumerate(st["faces"]):
+        m = np.nonzero(face == j)[0]
+        if len(m) == 0:
             continue
-        ch = read_exr(e)
-        if "RGBA" in ch:
-            rgb, a = ch["RGBA"][..., :3], ch["RGBA"][..., 3]
-        else:
-            rgb = ch["RGB"] if "RGB" in ch else np.stack([ch["R"], ch["G"], ch["B"]], -1)
-            a = ch.get("A", np.ones(rgb.shape[:2], np.float32))
-        col = _srgb(rgb / np.maximum(a, 1e-6)[..., None]).astype(np.float32)
-        w2c = np.eye(4); w2c[:3, :3] = np.asarray(v["R_world_to_cam"]); w2c[:3, 3] = np.asarray(v["t_world_to_cam"])
-        views.append(View(col, (a > min_alpha).astype(np.float32), np.zeros(a.shape, np.float32), K, w2c))
-        names.append(v["name"])
-    return views, names
-
-
-def mesh_depth(views, tm: trimesh.Trimesh) -> None:
-    """In place: each view's depth along its axis becomes the mesh's, by ray casting (0 where it sees no mesh or
-    the splat does not cover)."""
-    import open3d as o3d
-    sc = o3d.t.geometry.RaycastingScene()
-    sc.add_triangles(tm.vertices.astype(np.float32), tm.faces.astype(np.uint32))
-    for v in views:
-        h, w = v.depth.shape
-        u, y = np.meshgrid(np.arange(w) + 0.5, np.arange(h) + 0.5)
-        d = np.stack([(u - v.K[0, 2]) / v.K[0, 0], (y - v.K[1, 2]) / v.K[1, 1], np.ones_like(u)], -1)
-        c2w = v.c2w
-        rays = np.concatenate([np.broadcast_to(c2w[:3, 3], d.shape), d @ c2w[:3, :3].T], -1).astype(np.float32)
-        t = sc.cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy()           # d has z = 1: t is the axis depth
-        v.depth[:] = np.where(np.isfinite(t) & (v.alpha > 0.5), t, 0.0)
+        c = d[m] @ R.T
+        u = K[0, 0] * c[:, 0] / c[:, 2] + K[0, 2] - 0.5
+        v = K[1, 1] * c[:, 1] / c[:, 2] + K[1, 2] - 0.5
+        h, w = cov.shape
+        x0 = np.clip(np.floor(u).astype(int), 0, w - 2); y0 = np.clip(np.floor(v).astype(int), 0, h - 2)
+        fx, fy = np.clip(u - x0, 0, 1)[:, None], np.clip(v - y0, 0, 1)[:, None]
+        col[m] = (img[y0, x0] * (1 - fx) * (1 - fy) + img[y0, x0 + 1] * fx * (1 - fy)
+                  + img[y0 + 1, x0] * (1 - fx) * fy + img[y0 + 1, x0 + 1] * fx * fy) / 255.0
+        ok[m] = cov[y0, x0] & cov[y0 + 1, x0 + 1]
+    return col, ok
 
 
 # ---------------------------------------------------------------- the skin: where the air stops seeing
@@ -339,6 +351,87 @@ def drop_small(tm: trimesh.Trimesh, min_area_frac: float = 0.0005) -> trimesh.Tr
     return trimesh.Trimesh(out.vertices, out.faces, process=False)
 
 
+def flatten(tm: trimesh.Trimesh, gd, noise: float = 2.5, min_share: float = 0.02, rings: int = 6,
+            small: float = 0.01, smooth: int = 12, log=print):
+    """The room's large planes made plane. A splat's wall is a noisy sheet; a built wall is flat. Each large
+    connected patch of one of the guide's planes gets a robust quadratic fit of its height over the patch (so a
+    wall that leans or bows a little keeps doing so); the vertices within `noise` robust deviations of the fit move
+    onto it, the ones beyond twice that stay where they are (a window, a niche, a hole, a jamb), with a smooth
+    step between. Two refinements: a patch also takes the vertices `rings` edges around it, so at a corner a vertex
+    that faces both walls is put on both and the corner comes out a straight line; and what stands out but covers less than
+    `small` of the patch (a lump of gaussians, not a feature of the room) is flattened too. A patch that lies on
+    a plane already fitted (a wall cut in two by a niche) takes that plane's fit.
+    Returns (mesh, [what was done to each patch])."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    fn, nf, nv = tm.face_normals, len(tm.faces), len(tm.vertices)
+    lab = gd[1][gd[0].query(tm.triangles_center, workers=-1)[1]]
+    face_on = fn[np.arange(nf), lab // 2] * (1 - 2 * (lab % 2)) > 0.5
+    adj = tm.face_adjacency
+    same = (lab[adj[:, 0]] == lab[adj[:, 1]]) & face_on[adj[:, 0]] & face_on[adj[:, 1]]
+    k, comp = connected_components(coo_matrix((np.ones(int(same.sum()), bool), adj[same].T), shape=(nf, nf)), directed=False)
+    area = np.bincount(comp, weights=tm.area_faces * face_on, minlength=k)
+    e = tm.edges_unique
+    VV = coo_matrix((np.ones(2 * len(e), np.float32), (np.r_[e[:, 0], e[:, 1]], np.r_[e[:, 1], e[:, 0]])), shape=(nv, nv)).tocsr()
+    varea = np.bincount(tm.faces.ravel(), weights=np.repeat(tm.area_faces / 3, 3), minlength=nv)
+    V0, V = tm.vertices, tm.vertices.copy()
+    vn = np.asarray(tm.vertex_normals, np.float32).copy()     # smoothed: a lump's flank must still count as wall
+    for _ in range(smooth):
+        vn = vn + VV @ vn
+        vn /= np.maximum(np.linalg.norm(vn, axis=1, keepdims=True), 1e-12)
+    done, fits = [], []
+    for c in np.argsort(-area):
+        if area[c] < min_share * tm.area:
+            break
+        fsel = np.nonzero((comp == c) & face_on)[0]
+        core = np.zeros(nv, np.float32); core[np.unique(tm.faces[fsel])] = 1
+        axis = int(lab[fsel[0]] // 2)
+        vid = np.nonzero(core)[0]
+        uv = np.delete(V0[vid], axis, 1)
+        h = V0[vid, axis]
+        mid, half = uv.mean(0), np.maximum(np.ptp(uv, 0) / 2, 1e-9)
+
+        def design(pts):
+            x, y = ((np.delete(pts, axis, 1) - mid) / half).T
+            return np.stack([np.ones_like(x), x, y, x * x, x * y, y * y], 1)
+
+        for l_, design_, coef_, sig_ in fits:                 # a patch of a plane already fitted: the same plane
+            if l_ == lab[fsel[0]] and np.median(np.abs(h - design_(V0[vid]) @ coef_)) < 1.5 * sig_:
+                design, coef, sig = design_, coef_, sig_
+                break
+        else:
+            A = design(V0[vid])
+            w = np.ones(len(h))
+            for _ in range(8):                                 # Tukey biweight
+                coef = np.linalg.lstsq(A * w[:, None], h * w, rcond=None)[0]
+                r = h - A @ coef
+                sig = 1.4826 * np.median(np.abs(r[w > 0.1])) + 1e-12
+                w = np.clip(1 - (r / (4.685 * sig)) ** 2, 0, 1)
+            fits.append((lab[fsel[0]], design, coef, sig))
+        grown = core
+        for _ in range(rings):                                 # the patch and the vertices a few edges around it
+            grown = np.minimum(grown + VV @ grown, 1)
+        vid = np.nonzero(grown)[0]
+        r = V0[vid, axis] - design(V0[vid]) @ coef
+        t = np.clip(np.abs(r) / (noise * sig) - 1, 0, 1)       # 0 inside the noise, 1 at twice it
+        pull = 1 - t * t * (3 - 2 * t)
+        # only what faces this plane: the next wall's vertices are near the plane at the corner, but not of it
+        f_ = np.clip((np.abs(vn[vid, axis]) - 0.35) / 0.4, 0, 1)
+        pull *= f_ * f_ * (3 - 2 * f_)
+        # what stands out in small pieces is noise as well
+        outl = np.zeros(nv, bool); outl[vid[pull < 0.999]] = True
+        ee = e[outl[e[:, 0]] & outl[e[:, 1]]]
+        if len(ee):
+            _, cl = connected_components(coo_matrix((np.ones(len(ee), bool), ee.T), shape=(nv, nv)), directed=False)
+            ca = np.bincount(cl, weights=varea * outl, minlength=cl.max() + 1)
+            pull = np.where(ca[cl[vid]] < small * area[c], 1.0, pull)
+        V[vid, axis] = V0[vid, axis] - pull * r
+        done.append({"axis": "xyz"[axis], "area": round(float(area[c]), 1), "noise": round(float(sig), 4),
+                     "moved": round(float((pull > 0.5).mean()), 3)})
+        log(f"    plane {'xyz'[axis]}: area {area[c]:.0f}, noise {sig:.3f}, {(pull > 0.5).mean():.0%} of its vertices flattened")
+    return trimesh.Trimesh(V, tm.faces, process=False), done
+
+
 def decimate(tm: trimesh.Trimesh, faces: int, fine: int = 1_500_000) -> trimesh.Trimesh:
     """Quadric decimation. Above `fine` faces: fast-simplification (quick). Below: Open3D's, which keeps the open
     borders in place (boundary weight) and, being error-driven, spends the faces on creases and corners."""
@@ -378,10 +471,12 @@ def guide(tm: trimesh.Trimesh, iters: int = 12):
 
 # ---------------------------------------------------------------- UVs: planar charts on shelves
 def box_unwrap(tm: trimesh.Trimesh, res: int, guide=None, pad: int | None = None, min_chart: int = 24,
-               votes: int = 3, steep: float = 0.25):
+               votes: int = 3, steep: float = 0.25, density: float | None = None, max_tiles: int = 1):
     """Each face is projected along the axis its normal is nearest (six directions); neighbours vote so the labels
-    come in patches; connected patches are charts, the small ones given to a neighbour. Charts are packed on
-    shelves at one texel density. Returns (vmap, faces, uvs, charts): vertices = tm.vertices[vmap]."""
+    come in patches; connected patches are charts, the small ones given to a neighbour. Charts are packed
+    (guillotine) at one texel density: `density` texels a unit when given (lowered only if the islands do not fit
+    max_tiles tiles), else the highest that fits. A tile is res² texels; tile t holds u in [t, t+1) (UDIM 1001+t).
+    Returns (vmap, faces, uvs, islands, texels a unit, each face's tile): vertices = tm.vertices[vmap]."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
     fn = tm.face_normals
@@ -451,38 +546,56 @@ def box_unwrap(tm: trimesh.Trimesh, res: int, guide=None, pad: int | None = None
     w, h = np.where(rot, h, w), np.where(rot, w, h)
 
     def pack(tpu):
+        """Guillotine packing, the largest islands first, each into the free rectangle it fits best (the least
+        left over on its short side); the rectangle is cut in two along its longer leftover. More tiles are opened
+        as needed (None past max_tiles)."""
         W = np.ceil(w * tpu).astype(np.int64) + 2 * pad + 1
         H = np.ceil(h * tpu).astype(np.int64) + 2 * pad + 1
-        if W.max() > res:
+        if W.max() > res or H.max() > res:
             return None
-        o = np.argsort(-H, kind="stable")
-        x = np.zeros(k, np.int64); y = np.zeros(k, np.int64)
-        cx = cy = sh = 0
-        for i in o:
-            if cx + W[i] > res:
-                cy += sh; cx = 0; sh = 0
-            if sh == 0:
-                sh = H[i]
-            x[i], y[i] = cx, cy
-            cx += W[i]
-        return (x, y) if cy + sh <= res else None
+        x = np.zeros(k, np.int64); y = np.zeros(k, np.int64); til = np.zeros(k, np.int64)
+        free = np.array([[0, 0, 0, res, res]], np.int64)       # tile, x, y, width, height
+        tiles = 1
+        for i in np.argsort(-(W * H), kind="stable"):
+            fit = (free[:, 3] >= W[i]) & (free[:, 4] >= H[i])
+            if not fit.any():
+                if tiles >= max_tiles:
+                    return None
+                free = np.vstack([free, [tiles, 0, 0, res, res]]); tiles += 1
+                fit = (free[:, 3] >= W[i]) & (free[:, 4] >= H[i])
+            cand = np.nonzero(fit)[0]
+            j = cand[np.argmin(np.minimum(free[cand, 3] - W[i], free[cand, 4] - H[i]))]
+            t, fx, fy, fw, fh = free[j]
+            til[i], x[i], y[i] = t, fx, fy
+            dw, dh = fw - W[i], fh - H[i]
+            if dw > dh:                                        # cut so the larger piece stays whole
+                new = [[t, fx + W[i], fy, dw, fh], [t, fx, fy + H[i], W[i], dh]]
+            else:
+                new = [[t, fx, fy + H[i], fw, dh], [t, fx + W[i], fy, dw, H[i]]]
+            new = [r for r in new if r[3] > 2 * pad + 1 and r[4] > 2 * pad + 1]
+            free = np.vstack([np.delete(free, j, 0)] + ([new] if new else []))
+        return x, y, til
 
-    lo_t, hi_t = 0.0, res / max(w.max(), 1e-9)
+    cap = (res - 2 * pad - 2) / max(w.max(), 1e-9)             # the largest island must fit a tile
     best = None
-    for _ in range(40):
-        mid = 0.5 * (lo_t + hi_t)
-        r = pack(mid)
-        if r is None:
-            hi_t = mid
-        else:
-            best, lo_t = (mid, r), mid
+    if density is not None and pack(min(density, cap)) is not None:
+        best = (min(density, cap), pack(min(density, cap)))
+    else:
+        lo_t, hi_t = 0.0, min(density, cap) if density is not None else cap
+        for _ in range(14):
+            mid = 0.5 * (lo_t + hi_t)
+            r = pack(mid)
+            if r is None:
+                hi_t = mid
+            else:
+                best, lo_t = (mid, r), mid
     if best is None:
-        raise RuntimeError("box_unwrap: the charts do not fit the atlas")
-    tpu, (x, y) = best
+        raise RuntimeError("box_unwrap: the islands do not fit the atlas")
+    tpu, (x, y, til) = best
     cu = np.where(rot[vchart], vv - vmin[vchart], uu - umin[vchart])
     cv = np.where(rot[vchart], uu - umin[vchart], vv - vmin[vchart])
-    uvs = np.stack([(x[vchart] + pad + 0.5 + cu * tpu) / res, (y[vchart] + pad + 0.5 + cv * tpu) / res], 1)
-    return vmap, faces, uvs.astype(np.float32), int(k), float(tpu)
+    uvs = np.stack([(x[vchart] + pad + 0.5 + cu * tpu) / res + til[vchart], (y[vchart] + pad + 0.5 + cv * tpu) / res], 1)
+    return vmap, faces, uvs.astype(np.float32), int(k), float(tpu), til[ch]
 
 
 def rasterize_uv(faces, uvs, res: int):
@@ -557,7 +670,7 @@ def tangents(verts, faces, uvs, normals):
 
 
 def detail_maps(pos, N, T, sign, mask, hi: trimesh.Trimesh, reach: float, ao_reach: float, ao_rays: int = 24,
-                chunk: int = 2_000_000, seed: int = 0):
+                chunk: int = 1_000_000, seed: int = 0):
     """What the fine mesh has that this LOD lost, for every texel: a ray along the LOD's normal, both ways, finds
     the fine surface within `reach`. Returns (normal map HxWx3 in tangent space, -1..1; height HxW, units along the
     normal; ao HxW, the share of the hemisphere open within ao_reach). Basis: T, sign·N×T, N as interpolated."""
@@ -653,32 +766,112 @@ def checker(res: int, tpu: float, square: float) -> np.ndarray:
     return (img * 255).astype(np.uint8)
 
 
-def bake(pos, nrm, mask, views, depth_tol: float, chunk: int = 1_500_000, iters: int = 2, sigma: float = 0.08):
-    """texture.bake over the texels in chunks (a scene's atlas has tens of millions): the views that see a texel,
-    weighted by angle and distance, then passes that weigh down the samples far from the estimate."""
-    from .texture import _samples
+def bake(pos, nrm, mask, sts: list[dict], occluder, off: float, keep: int = 2, tries: int = 4, cos_power: float = 4.0,
+         sharp: float = 3.0, chunk: int = 1_500_000):
+    """Texel colour from the station that sees it best. Averaging every view blurs: the mesh is not where each view
+    saw the splat, so their colours land apart. Each station scores cos(angle)^cos_power / distance²; the stations
+    are tried from the best down, a ray to the station tells whether the mesh (`occluder`, an Open3D ray casting
+    scene) is in the way, and the first `keep` that see the texel are mixed by score^sharp (in effect the best one,
+    with a short blend where two score alike). Returns (texture HxWx3, covered HxW)."""
+    import open3d as o3d
     P_all, N_all = pos[mask].astype(np.float64), nrm[mask].astype(np.float64)
     cols = np.zeros((len(P_all), 3), np.float32)
     good = np.zeros(len(P_all), bool)
+    eyes = np.stack([s["eye"] for s in sts])
+    tries = min(tries, len(sts))
     for a in range(0, len(P_all), chunk):
         P, N = P_all[a:a + chunk], N_all[a:a + chunk]
-        est = None
-        for _ in range(iters + 1):
-            acc = np.zeros((len(P), 3)); ws = np.zeros(len(P))
-            for v in views:
-                col, w = _samples(P, N, v, depth_tol, 2.0)
-                if not w.any():
-                    continue
-                if est is not None:
-                    w = w / (1.0 + ((col - est) ** 2).sum(1) / sigma ** 2)
-                acc += col * w[:, None]; ws += w
-            ok = ws > 0
-            est = np.where(ok[:, None], acc / np.maximum(ws, 1e-30)[:, None], 0)
-        cols[a:a + chunk] = est; good[a:a + chunk] = ok
+        d = eyes[None] - P[:, None]                            # n × S × 3
+        dist = np.linalg.norm(d, axis=2)
+        cos = (d * N[:, None]).sum(2) / np.maximum(dist, 1e-9)
+        score = np.where(cos > 0.05, np.maximum(cos, 0) ** cos_power / np.maximum(dist, 1e-9) ** 2, 0.0)
+        order = np.argsort(-score, axis=1)[:, :tries]
+        acc = np.zeros((len(P), 3)); ws = np.zeros(len(P)); got = np.zeros(len(P), np.int32)
+        org = P + N * off
+        for r in range(tries):
+            sidx = order[:, r]
+            sc = score[np.arange(len(P)), sidx]
+            todo = np.nonzero((got < keep) & (sc > 0))[0]
+            if len(todo) == 0:
+                break
+            to = eyes[sidx[todo]] - org[todo]
+            ln = np.linalg.norm(to, axis=1)
+            rays = np.concatenate([org[todo], to / ln[:, None]], 1).astype(np.float32)
+            free = occluder.cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy() >= ln
+            todo, sid = todo[free], sidx[todo][free]
+            for s_ in np.unique(sid):
+                m = todo[sid == s_]
+                col, ok = _sample_station(sts[s_], P[m])
+                m, col = m[ok], col[ok]
+                wgt = score[m, s_] ** sharp
+                acc[m] += col * wgt[:, None]; ws[m] += wgt; got[m] += 1
+        ok = ws > 0
+        cols[a:a + chunk] = np.where(ok[:, None], acc / np.maximum(ws, 1e-300)[:, None], 0)
+        good[a:a + chunk] = ok
     tex = np.zeros(pos.shape, np.float32)
     cov = np.zeros(mask.shape, bool)
     tex[mask] = cols; cov[mask] = good
     return tex, cov
+
+
+def render_mesh(verts, faces, uvs, tiles: list, st: dict):
+    """The mesh with its base colour (no light) from a station's six cameras: what the splat's views are compared
+    with. tiles: the atlas's tiles as stored (HxWx3 uint8, v up from row 0). Returns [(rgb HxWx3 uint8, hit HxW)]."""
+    import open3d as o3d
+    sc = o3d.t.geometry.RaycastingScene()
+    sc.add_triangles(np.ascontiguousarray(verts, np.float32), np.ascontiguousarray(faces, np.uint32))
+    K = st["K"]
+    out = []
+    for img, cov, R in st["faces"]:
+        h, w = cov.shape
+        u, y = np.meshgrid(np.arange(w) + 0.5, np.arange(h) + 0.5)
+        d = np.stack([(u - K[0, 2]) / K[0, 0], (y - K[1, 2]) / K[1, 1], np.ones_like(u)], -1) @ R
+        r = sc.cast_rays(o3d.core.Tensor(np.concatenate([np.broadcast_to(st["eye"], d.shape), d], -1).astype(np.float32)))
+        hit = np.isfinite(r["t_hit"].numpy())
+        fi = faces[np.where(hit, r["primitive_ids"].numpy(), 0)]
+        b = r["primitive_uvs"].numpy()
+        wgt = np.stack([1 - b[..., 0] - b[..., 1], b[..., 0], b[..., 1]], -1)
+        stc = (wgt[..., None] * uvs[fi]).sum(-2)
+        t = np.clip(np.floor(stc[..., 0]).astype(int), 0, len(tiles) - 1)
+        col = np.zeros((h, w, 3), np.float32)
+        for k, tex in enumerate(tiles):
+            m = hit & (t == k)
+            if not m.any():
+                continue
+            res = tex.shape[0]
+            x = np.clip((stc[m][:, 0] - k) * res - 0.5, 0, res - 1.001); yy = np.clip(stc[m][:, 1] * res - 0.5, 0, res - 1.001)
+            x0, y0 = np.floor(x).astype(int), np.floor(yy).astype(int)
+            fx, fy = (x - x0)[:, None], (yy - y0)[:, None]
+            col[m] = (tex[y0, x0] * (1 - fx) * (1 - fy) + tex[y0, x0 + 1] * fx * (1 - fy)
+                      + tex[y0 + 1, x0] * (1 - fx) * fy + tex[y0 + 1, x0 + 1] * fx * fy)
+        out.append((col.round().clip(0, 255).astype(np.uint8), hit))
+    return out
+
+
+def fidelity(verts, faces, uvs, tiles: list, st: dict, png=None) -> dict:
+    """How much of the splat the textured mesh keeps: PSNR and SSIM of the mesh's base colour against the splat's
+    own view, over the pixels both cover, for each of a station's six cameras. With png, the camera with the most
+    detail side by side at full size: the splat on the left, the mesh on the right."""
+    from skimage.metrics import structural_similarity
+    from PIL import Image
+    rows, best = [], None
+    for j, ((ref, cov, _), (img, hit)) in enumerate(zip(st["faces"], render_mesh(verts, faces, uvs, tiles, st))):
+        m = cov & hit
+        if m.mean() < 0.2:
+            continue
+        a, b = ref.astype(np.float64) / 255, img.astype(np.float64) / 255
+        mse = float(((a - b) ** 2)[m].mean())
+        ssim_map = structural_similarity(a, b, channel_axis=2, data_range=1.0, full=True)[1].mean(2)
+        g = np.asarray(Image.fromarray(ref).convert("L"), np.float64)
+        detail = float(np.abs(np.diff(g, axis=0))[m[1:]].mean() + np.abs(np.diff(g, axis=1))[m[:, 1:]].mean())
+        rows.append({"view": j, "psnr": round(10 * np.log10(1 / max(mse, 1e-12)), 2), "ssim": round(float(ssim_map[m].mean()), 4),
+                     "shared": round(float(m.mean()), 3), "detail": round(detail, 3)})
+        if best is None or detail > best[0]:
+            best = (detail, ref, img)
+    if png is not None and best is not None:
+        Image.fromarray(np.concatenate([best[1], best[2]], 1)).save(png)
+    return {"psnr_mean": round(float(np.mean([r["psnr"] for r in rows])), 2) if rows else None,
+            "ssim_mean": round(float(np.mean([r["ssim"] for r in rows])), 4) if rows else None, "views": rows}
 
 
 def stats(tm: trimesh.Trimesh) -> dict:
@@ -826,15 +1019,17 @@ def write_lods(out: Path, lods: list[dict], default: int = 1, name: str = "Scene
 
 def preview(verts, faces, uvs, tex, eye, png, size: int = 512, light=None, normals=None, nmap=None, tang=None,
             sign=None) -> None:
-    """The textured mesh from `eye`, six cube faces in one image (CPU ray casting; back faces in red). With `light`
-    (a point), the colour is lit from it: by the vertex normals, or by the normal map over them when nmap (HxWx3
-    tangent space, -1..1), tang and sign are given."""
+    """The textured mesh from `eye`, six cube faces in one image (CPU ray casting; back faces in red). tex: the
+    atlas, one tile or a list of tiles (HxWx3 uint8, v up from row 0). With `light` (a point), the colour is lit
+    from it: by the vertex normals, or by the normal map over them when nmap (a tile or tiles, HxWx3 tangent space,
+    -1..1 or as stored in 8 bits), tang and sign are given."""
     import open3d as o3d
     from PIL import Image
     sc = o3d.t.geometry.RaycastingScene()
     sc.add_triangles(np.ascontiguousarray(verts, np.float32), np.ascontiguousarray(faces, np.uint32))
     u, v = np.meshgrid((np.arange(size) + .5) / size * 2 - 1, (np.arange(size) + .5) / size * 2 - 1)
-    res = tex.shape[0]
+    tiles = tex if isinstance(tex, list) else [tex]           # a tile: HxWx3 uint8, v up from row 0
+    nmaps = None if nmap is None else (nmap if isinstance(nmap, list) else [nmap])
     out = []
     for f, up in CUBE:
         f, up = np.array(f, float), np.array(up, float)
@@ -847,8 +1042,17 @@ def preview(verts, faces, uvs, tex, eye, png, size: int = 512, light=None, norma
         fi = faces[np.where(hit, pid, 0)]
         w = np.stack([1 - b[..., 0] - b[..., 1], b[..., 0], b[..., 1]], -1)
         st = (w[..., None] * uvs[fi]).sum(-2)
-        px = np.clip((st * res).astype(int), 0, res - 1)
-        col = tex[res - 1 - px[..., 1], px[..., 0]].astype(np.float32) / 255
+        ti = np.clip(np.floor(st[..., 0]).astype(int), 0, len(tiles) - 1)
+        col = np.zeros(st.shape[:2] + (3,), np.float32)
+        m_ = np.zeros(st.shape[:2] + (3,), np.float32); m_[..., 2] = 1
+        for k_, tl in enumerate(tiles):
+            sel = ti == k_
+            res = tl.shape[0]
+            px = np.clip(((st[sel] - [k_, 0]) * res).astype(int), 0, res - 1)
+            col[sel] = tl[px[:, 1], px[:, 0]].astype(np.float32) / 255
+            if nmaps is not None:
+                nm = nmaps[k_][px[:, 1], px[:, 0]]
+                m_[sel] = nm / 127.5 - 1 if nm.dtype == np.uint8 else nm
         back = (h["primitive_normals"].numpy() * d).sum(-1) > 0
         if light is not None and normals is not None:
             n = (w[..., None] * normals[fi]).sum(-2)
@@ -856,8 +1060,7 @@ def preview(verts, faces, uvs, tex, eye, png, size: int = 512, light=None, norma
             if nmap is not None:
                 tg = (w[..., None] * tang[fi]).sum(-2)
                 bt = np.cross(n, tg) * sign[fi[..., 0]][..., None]
-                m = nmap[res - 1 - px[..., 1], px[..., 0]]
-                n = tg * m[..., :1] + bt * m[..., 1:2] + n * m[..., 2:]
+                n = tg * m_[..., :1] + bt * m_[..., 1:2] + n * m_[..., 2:]
                 n /= np.maximum(np.linalg.norm(n, axis=-1, keepdims=True), 1e-12)
             P = eye + d * np.where(hit, t, 0)[..., None]
             L = light - P
