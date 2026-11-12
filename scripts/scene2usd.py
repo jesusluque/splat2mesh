@@ -15,7 +15,8 @@ the same input and surface options only bakes again.
 Writes OUT_DIR/scene.usda (variantSet "lod": lod0 … lodN, each a reference to lodK.usdc with its maps:
 lodK_basecolor, _normal (tangent space), _occlusion, _height; `.png`, or `.<UDIM>.png` tiles 1001, 1002 … when the
 density needs more than one tile), OUT_DIR/render and render_base (the views, NAME.rgba.png: 8-bit sRGB and alpha), fidelity_lodK.jpg (the splat as baked from | the mesh, from the
-station kept out), preview_lodK*.png (the mesh from the first station; lit with and without the normal map),
+station kept out, in the file's own frame whatever --up), preview_lodK*.png (the mesh from the first station as the USD
+stands, +Y up: a wrong --up shows here as a room upside down; lit with and without the normal map),
 uv_checker_lodK.png (the UVs as a checker of equal world squares) and report.json (mesh, UV and fidelity numbers).
 --up names the file's up axis; the USD is written Y-up.
 """
@@ -213,6 +214,7 @@ for k, (nf, res, den) in enumerate(zip(faces, texs, dens)):
     nt = int(ftile.max()) + 1
     verts, normals = tm.vertices[vmap], tm.vertex_normals[vmap]
     tang, sign = scene.tangents(verts, uvf, uvs, normals)
+    vu, eye_u = verts @ U.T, pts[0] @ U.T                               # the previews: as the USD stands, +Y up
     name = (lambda m, t: f"lod{k}_{m}.{1001 + t}.png") if nt > 1 else (lambda m, t: f"lod{k}_{m}.png")
     maps = {"basecolor": f"lod{k}_basecolor.<UDIM>.png" if nt > 1 else f"lod{k}_basecolor.png"}
     ctiles, ntiles, hraw = [], [], []
@@ -262,14 +264,15 @@ for k, (nf, res, den) in enumerate(zip(faces, texs, dens)):
                 Image.fromarray((himg[::-1].clip(0, 1) * 65535).round().astype(np.uint16)).save(out / name("height", t))
             maps["height"] = maps["basecolor"].replace("basecolor", "height"); height = (h1 - h0, h0)
         del hraw
-        scene.preview(verts, uvf, uvs, ctiles, pts[0], out / f"preview_lod{k}_lit_normalmap.png", light=light,
-                      normals=normals, nmap=ntiles, tang=tang, sign=sign)
-        scene.preview(verts, uvf, uvs, ctiles, pts[0], out / f"preview_lod{k}_lit_plain.png", light=light, normals=normals)
+        scene.preview(vu, uvf, uvs, ctiles, eye_u, out / f"preview_lod{k}_lit_normalmap.png", light=light @ U.T,
+                      normals=normals @ U.T, nmap=ntiles, tang=tang @ U.T, sign=sign)
+        scene.preview(vu, uvf, uvs, ctiles, eye_u, out / f"preview_lod{k}_lit_plain.png", light=light @ U.T,
+                      normals=normals @ U.T)
         del ntiles
     scene.write_lod(out / f"lod{k}.usdc", verts @ U.T, uvf, uvs, normals @ U.T, tang @ U.T, sign, maps, height,
                     meters_per_unit=a.meters_per_unit, displace=a.displacement)
-    scene.preview(verts, uvf, uvs, ctiles, pts[0], out / f"preview_lod{k}.png")
-    scene.preview(verts, uvf, uvs, [scene.checker(res, tpu, square)] * nt, pts[0], out / f"uv_checker_lod{k}.png")
+    scene.preview(vu, uvf, uvs, ctiles, eye_u, out / f"preview_lod{k}.png")
+    scene.preview(vu, uvf, uvs, [scene.checker(res, tpu, square)] * nt, eye_u, out / f"uv_checker_lod{k}.png")
     fid_check = scene.fidelity(verts, uvf, uvs, ctiles, check or sts[0], out / f"fidelity_lod{k}.jpg")
     fid_baked = scene.fidelity(verts, uvf, uvs, ctiles, sts[0]) if check is not None else None
     fid_full = scene.fidelity(verts, uvf, uvs, ctiles, check_full) if check_full is not None and a.colour == "base" else None
