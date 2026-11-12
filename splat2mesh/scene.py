@@ -1036,6 +1036,45 @@ def bake(pos, nrm, mask, sts: list[dict], occluder, off: float, keep: int | None
     return tex, cov
 
 
+def station_agreement(tm: trimesh.Trimesh, sts: list[dict], occluder, off: float, spacing: float, n: int = 120_000):
+    """How well each station's picture of the surface agrees with the others'. A splat looks clean only from near
+    where it was captured; from elsewhere it shows specks that no other view shares. At n points of the surface
+    each station that sees the point gives the brightness steps to four neighbours `spacing` away on the surface
+    (the local detail); two stations agree by the correlation of those steps over the points both see. Returns
+    (score per station: its mean agreement with the others, the S×S matrix, NaN where two share too little)."""
+    import open3d as o3d
+    rng = np.random.default_rng(0)
+    P, fi = trimesh.sample.sample_surface(tm, n, seed=0)
+    N = tm.face_normals[fi]
+    a = np.cross(N, rng.normal(size=N.shape)); a /= np.maximum(np.linalg.norm(a, axis=1, keepdims=True), 1e-12)
+    b = np.cross(N, a)
+    pts = [P, P + a * spacing, P - a * spacing, P + b * spacing, P - b * spacing]
+    S = len(sts)
+    G = np.full((S, n, 4), np.nan, np.float32)
+    org = P + N * off
+    for k, st in enumerate(sts):
+        to = st["eye"] - org
+        ln = np.linalg.norm(to, axis=1)
+        rays = np.concatenate([org, to / ln[:, None]], 1).astype(np.float32)
+        m = np.nonzero(((to * N).sum(1) / ln > 0.2) & (occluder.cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy() >= ln))[0]
+        ok = np.ones(len(m), bool)
+        lum = []
+        for q in pts:
+            c, o = _sample_station(st, q[m])
+            lum.append(c.mean(1)); ok &= o
+        G[k, m[ok]] = np.stack([lum[i] - lum[0] for i in range(1, 5)], 1)[ok]
+    C = np.full((S, S), np.nan)
+    for i in range(S):
+        for j in range(i + 1, S):
+            m = ~np.isnan(G[i, :, 0]) & ~np.isnan(G[j, :, 0])
+            if m.sum() > n // 100:
+                x, y = G[i, m].ravel().astype(np.float64), G[j, m].ravel().astype(np.float64)
+                C[i, j] = C[j, i] = float((x * y).sum() / np.sqrt((x * x).sum() * (y * y).sum() + 1e-12))
+    with np.errstate(all="ignore"):
+        score = np.nan_to_num(np.nanmean(C, 1), nan=0.0)
+    return score, C
+
+
 def bake_pick(pos, nrm, mask, sts: list[dict], occluder, off: float, sigma: float, chunk: int = 1_500_000):
     """Texel colour from one station, the one that agrees best with the rest around the texel. A splat is clean only
     from near where it was captured: elsewhere it shows specks, and the mean of all stations is a blur of them. A

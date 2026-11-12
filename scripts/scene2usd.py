@@ -61,10 +61,11 @@ ap.add_argument("--colour", default="base", choices=["base", "full"], help="base
 ap.add_argument("--mix", default="mean", choices=["mean", "best", "pick"], help="a texel's colour: the mean of the "
                 "stations that see it (smooth, and blurred where they disagree); the one that sees it best; or pick, "
                 "the one that agrees best with the rest around the texel, unmixed (experimental)")
-ap.add_argument("--only", default=None, help="bake from these stations alone (their numbers, with commas): the ones "
-                "from which the splat looks clean")
-ap.add_argument("--then", default=None, help="stations (numbers, with commas) that colour what those of --only do "
-                "not see, by their mean")
+ap.add_argument("--only", default=None, help="bake from these stations alone: their numbers with commas; top:N, the N "
+                "whose view of the surface agrees best with the others' (the log lists them: a splat is clean only "
+                "from near where it was captured); or auto, all but those that agree far less than the rest")
+ap.add_argument("--then", default=None, help="stations (numbers, or top:N) that colour what those of --only do not "
+                "see, by their mean")
 ap.add_argument("--front", type=float, default=0.0, help="experimental: scene units a pixel of front views, every "
                 "plane rendered head on and baked from that view (0: none). A splat seen from where it was not "
                 "captured can be full of specks, and then so are these")
@@ -170,9 +171,6 @@ else:
     full = sts[-1:]
 check, sts = (sts[-1], sts[:-1]) if len(sts) == n_all else (None, sts)
 check_full = full[0] if check is not None and full else None
-sts_then = [sts[int(i)] for i in a.then.split(",")] if a.then else []
-if a.only:
-    sts = [sts[int(i)] for i in a.only.split(",")]
 rep.update(colour=a.colour, stations_baked=len(sts), check_station=check is not None, t_render_s=round(time.time() - t1, 1))
 if check is None:
     log("    some views failed to render: no station is kept out, fidelity is measured from a baked one")
@@ -180,6 +178,26 @@ if check is None:
 import open3d as o3d                                                 # noqa: E402
 occ = o3d.t.geometry.RaycastingScene()
 occ.add_triangles(raw.vertices.astype(np.float32), raw.faces.astype(np.uint32))
+agree, _ = scene.station_agreement(raw, sts, occ, 2 * voxel, 0.005 * diag)
+rank = [int(i) for i in np.argsort(-agree)]
+rep["station_agreement"] = [round(float(x), 3) for x in agree]
+log("stations by agreement with the others: " + "  ".join(f"{i} ({agree[i]:.2f})" for i in rank))
+
+
+def chosen(spec):
+    if spec == "auto":                                               # all but the outliers below
+        med = float(np.median(agree)); mad = float(np.median(np.abs(agree - med)))
+        return [i for i in range(len(sts)) if agree[i] >= med - 3.7 * mad]
+    if spec.startswith("top:"):
+        return sorted(rank[:int(spec[4:])])
+    return [int(i) for i in spec.split(",")]
+
+
+sts_then = [sts[i] for i in chosen(a.then)] if a.then else []
+if a.only:
+    rep["stations_only"] = chosen(a.only)
+    log(f"baking from stations {rep['stations_only']}" + (f", then {chosen(a.then)}" if a.then else ""))
+    sts = [sts[i] for i in rep["stations_only"]]
 fronts, fcams = [], None
 fpx = a.front
 if fpx > 0:                            # the planes head on; they follow the surface, so a new surface renders them anew
