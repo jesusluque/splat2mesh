@@ -1076,7 +1076,7 @@ def station_agreement(tm: trimesh.Trimesh, sts: list[dict], occluder, off: float
 
 
 def to_the_picture(tm: trimesh.Trimesh, sts: list[dict], occluder, off: float, reach: float, cell: float,
-                   steps: int = 17, n: int = 400_000, smooth: float = 1.5):
+                   steps: int = 17, n: int = 400_000, smooth: float = 2.0):
     """The surface moved to where the splat paints it. The skin is where the room's air stops seeing, and the
     picture a station sees on a wall lies a little behind or before it; a station then projects the picture onto
     the mesh shifted by that depth times the tangent of its view angle, each station its own way, and their mean
@@ -1138,7 +1138,7 @@ def to_the_picture(tm: trimesh.Trimesh, sts: list[dict], occluder, off: float, r
     e = tm.edges_unique
     A = sp.coo_matrix((np.ones(len(e) * 2), (np.r_[e[:, 0], e[:, 1]], np.r_[e[:, 1], e[:, 0]])), shape=(len(V),) * 2).tocsr()
     A = sp.diags(1.0 / np.maximum(np.asarray(A.sum(1)).ravel(), 1)) @ A
-    for _ in range(8):                                         # the way to move: the normal without the skin's noise
+    for _ in range(30):                                        # the way to move: the normal without the skin's noise
         VN = 0.5 * VN + 0.5 * (A @ VN)
     VN /= np.maximum(np.linalg.norm(VN, axis=1, keepdims=True), 1e-12)
     coords = ((V - lo) / cell - 0.5).T
@@ -1155,7 +1155,7 @@ def to_the_picture(tm: trimesh.Trimesh, sts: list[dict], occluder, off: float, r
             rays = np.concatenate([V[m] + VN[m] * sgn * off, VN[m] * sgn], 1).astype(np.float32)
             room[m] = 0.4 * (occluder.cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy() + off)
     h_v = np.sign(h_v) * np.minimum(np.abs(h_v), room)
-    for _ in range(6):                                         # neighbours move together, and never further than allowed
+    for _ in range(30):                                        # neighbours move together, and never further than allowed
         h_v = 0.5 * h_v + 0.5 * (A @ h_v)
         h_v = np.sign(h_v) * np.minimum(np.abs(h_v), room)
     F, fn0 = np.asarray(tm.faces), np.asarray(tm.face_normals)
