@@ -69,9 +69,37 @@ def run_script(cmds: list, lock: bool = True, log: Path | None = None) -> None:
     with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
         f.write("set -e\n" + "\n".join(lines) + "\n")
     cmd = (gpu_prefix() if lock else []) + ["bash", f.name]
+    # The job runs in its own process group and goes when this process is stopped (SIGTERM, Ctrl-C, an error):
+    # otherwise a stopped run leaves its renders going, holding the GPU and writing views nobody waits for.
+    import signal
     with open(log, "w") if log else open(os.devnull, "w") as lf:
-        subprocess.run(cmd, check=True, env=athenea_env(), stdin=subprocess.DEVNULL, stdout=lf, stderr=subprocess.STDOUT)
+        job = subprocess.Popen(cmd, env=athenea_env(), stdin=subprocess.DEVNULL, stdout=lf, stderr=subprocess.STDOUT,
+                               start_new_session=True)
+
+        def stop():
+            try:
+                os.killpg(job.pid, signal.SIGTERM)             # TERM: the lock's holder releases it in its trap
+            except OSError:                                    # already gone
+                pass
+
+        def on_term(signum, frame):
+            stop()
+            raise SystemExit(128 + signum)
+        try:
+            old = signal.signal(signal.SIGTERM, on_term)
+        except ValueError:                                     # not the main thread: no handler, the rest still holds
+            old = None
+        try:
+            rc = job.wait()
+        except BaseException:
+            stop()
+            raise
+        finally:
+            if old is not None:
+                signal.signal(signal.SIGTERM, old)
     os.unlink(f.name)
+    if rc:
+        raise subprocess.CalledProcessError(rc, cmd)
 
 
 def _q(x) -> str:

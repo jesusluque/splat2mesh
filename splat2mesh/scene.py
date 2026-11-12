@@ -187,7 +187,11 @@ def compact_views(out: Path) -> int:
     """Every EXR view left in out/views (an earlier run's) made compact; the previews go. Returns how many."""
     d, n = Path(out) / "views", 0
     for e in sorted(d.glob("*.exr")):
-        _compact(e); n += 1
+        try:
+            _compact(e)
+        except Exception:                                      # half written (another job is on it): left for later
+            continue
+        n += 1
         (d / f"{e.stem}.png").unlink(missing_ok=True)
     return n
 
