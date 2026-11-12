@@ -57,6 +57,7 @@ def load(path, min_opacity: float = 0.03, up: str = "y", crop_pct: float = 1.0, 
     keep &= np.all((xyz > lo) & (xyz < hi), 1)
     v, xyz, alpha = v[keep], xyz[keep], alpha[keep]
     scale = np.exp(np.stack([v[f"scale_{i}"] for i in range(3)], 1)).astype(np.float64)
+    scale = np.maximum(scale, 0.01 * scale.max(1, keepdims=True))   # flat (2D) gaussians: a scale of 1e-19, or 0, has no inverse
     q = np.stack([v[f"rot_{i}"] for i in range(4)], 1).astype(np.float64)
     q /= np.linalg.norm(q, axis=1, keepdims=True)
     rgb = np.clip(0.5 + SH_C0 * np.stack([v[f"f_dc_{i}"] for i in range(3)], 1), 0, 1).astype(np.float32)
@@ -165,12 +166,39 @@ def cube_views(points, size: int, fov_deg: float = 100.0) -> dict:
             "views": views}
 
 
+def _compact(exr: Path) -> None:
+    """A rendered view kept as NAME.rgba.png (8-bit sRGB, colour not premultiplied, alpha), a sixth of the EXR,
+    which is deleted: the bake reads 8-bit colour anyway."""
+    from PIL import Image
+    from .athenea import read_exr, _srgb
+    ch = read_exr(exr)
+    if "RGBA" in ch:
+        rgb, a = ch["RGBA"][..., :3], ch["RGBA"][..., 3]
+    else:
+        rgb = ch["RGB"] if "RGB" in ch else np.stack([ch["R"], ch["G"], ch["B"]], -1)
+        a = ch.get("A", np.ones(rgb.shape[:2], np.float32))
+    col = _srgb(rgb / np.maximum(a, 1e-6)[..., None])
+    img = (np.clip(np.concatenate([col, a[..., None]], -1), 0, 1) * 255).round().astype(np.uint8)
+    Image.fromarray(img, "RGBA").save(exr.with_suffix(".rgba.png"))
+    exr.unlink()
+
+
+def compact_views(out: Path) -> int:
+    """Every EXR view left in out/views (an earlier run's) made compact; the previews go. Returns how many."""
+    d, n = Path(out) / "views", 0
+    for e in sorted(d.glob("*.exr")):
+        _compact(e); n += 1
+        (d / f"{e.stem}.png").unlink(missing_ok=True)
+    return n
+
+
 def render(ply, cams: dict, out: Path, batch: int = 18, log=print) -> None:
-    """The views of cams rendered by athenea into out/views (NAME.exr, NAME.png), a GPU job every `batch`."""
+    """The views of cams rendered by athenea into out/views (NAME.rgba.png), a GPU job every `batch`."""
     from . import athenea
     d = Path(out) / "views"; d.mkdir(parents=True, exist_ok=True)
+    compact_views(out)
     size = cams["intrinsics"]["width"]
-    todo = [v for v in cams["views"] if not (d / f"{v['name']}.exr").exists()]
+    todo = [v for v in cams["views"] if not (d / f"{v['name']}.rgba.png").exists()]
     for a in range(0, len(todo), batch):
         cmds = []
         for v in todo[a:a + batch]:
@@ -178,34 +206,26 @@ def render(ply, cams: dict, out: Path, batch: int = 18, log=print) -> None:
                           *map(str, v["target"]), "--up", *map(str, v["up"]), "--focal", str(cams["focal_mm"]),
                           "--size", f"{size}x{size}", "-o", str(d / f"{v['name']}.exr")], "tolerate"))
         athenea.run_script(cmds, log=Path(out) / f"render_{a:03d}.log")
+        compact_views(out)
         log(f"    rendered {min(a + batch, len(todo))}/{len(todo)} views")
-    for v in cams["views"]:
-        e = d / f"{v['name']}.exr"
-        if e.exists() and not (d / f"{v['name']}.png").exists():
-            athenea.exr_to_png(e, d / f"{v['name']}.png", (0, 0, 0))
 
 
 def load_views(out: Path, cams: dict, min_alpha: float = 0.3) -> list[dict]:
     """The rendered views grouped by station: [{"eye", "faces": [(rgb uint8 HxWx3 sRGB un-premultiplied, covered
     HxW bool, R world→camera)] in CUBE's order, "K"}]. A station with a view missing is left out."""
-    from .athenea import read_exr, _srgb
+    from PIL import Image
     it = cams["intrinsics"]
     K = np.array([[it["fx"], 0, it["cx"]], [0, it["fy"], it["cy"]], [0, 0, 1.0]])
     out_st = []
     for i in range(len(cams["views"]) // 6):
         faces = []
         for v in cams["views"][6 * i:6 * i + 6]:
-            e = Path(out) / "views" / f"{v['name']}.exr"
-            if not e.exists():
+            f = Path(out) / "views" / f"{v['name']}.rgba.png"
+            if not f.exists():
                 break
-            ch = read_exr(e)
-            if "RGBA" in ch:
-                rgb, a = ch["RGBA"][..., :3], ch["RGBA"][..., 3]
-            else:
-                rgb = ch["RGB"] if "RGB" in ch else np.stack([ch["R"], ch["G"], ch["B"]], -1)
-                a = ch.get("A", np.ones(rgb.shape[:2], np.float32))
-            col = (_srgb(rgb / np.maximum(a, 1e-6)[..., None]) * 255).round().astype(np.uint8)
-            faces.append((col, a > min_alpha, np.asarray(v["R_world_to_cam"], np.float64)))
+            im = np.asarray(Image.open(f))
+            faces.append((np.ascontiguousarray(im[..., :3]), im[..., 3] > min_alpha * 255,
+                          np.asarray(v["R_world_to_cam"], np.float64)))
         if len(faces) == 6:
             out_st.append({"eye": np.asarray(cams["views"][6 * i]["eye"], np.float64), "faces": faces, "K": K})
     return out_st
@@ -245,7 +265,7 @@ LN2 = float(np.log(2.0))
 def _density(sel, origin, shape, step):
     """Optical depth a voxel along each axis: for axis d, Σ τ_i G_i(x) sqrt(dᵀΣ⁻¹d / 2π) · step, with
     τ_i = -log(1 - α_i): summed along d through a gaussian's centre it gives back that gaussian's own τ_i."""
-    xyz, inv6, tau, rad = _G["xyz"][sel], _G["inv6"][sel], _G["tau"][sel], _G["rad"][sel]
+    xyz, inv6, tau, rad, fac = _G["xyz"][sel], _G["inv6"][sel], _G["tau"][sel], _G["rad"][sel], _G["fac"][sel]
     n = int(np.prod(shape))
     acc = np.zeros((3, n), np.float64)
     p = (xyz - origin) / step
@@ -264,11 +284,11 @@ def _density(sel, origin, shape, step):
                  + 2 * (a[:, None, 3] * d[..., 0] * d[..., 1] + a[:, None, 4] * d[..., 0] * d[..., 2]
                         + a[:, None, 5] * d[..., 1] * d[..., 2]))
             ok = (m < 9.0) & np.all((vox >= 0) & (vox < shape), -1)
-            w = (tau[ch, None] * np.exp(-0.5 * m))[ok]
+            w = (tau[ch, None] * np.exp(-0.5 * np.maximum(m, 0.0)))[ok]
             flat = (vox[..., 0][ok].astype(np.int64) * shape[1] + vox[..., 1][ok]) * shape[2] + vox[..., 2][ok]
             row = np.nonzero(ok)[0]
             for ax in range(3):
-                acc[ax] += np.bincount(flat, weights=w * (np.sqrt(a[row, ax] / (2 * np.pi)) * step), minlength=n)
+                acc[ax] += np.bincount(flat, weights=w * (fac[ch][row, ax] * np.sqrt(a[row, ax] / (2 * np.pi)) * step), minlength=n)
     return acc.reshape(3, *shape).astype(np.float32)
 
 
@@ -334,9 +354,23 @@ def skin(g: dict, air, air_lo, air_step, voxel: float, blur: float = 0.5, tile: 
     import multiprocessing as mp
     from scipy import ndimage as ndi
     lo, hi = g["lo"], g["hi"]
+    # A gaussian thinner than the lattice falls between its points. Each one is widened by half a voxel, Σ' = Σ + (voxel/2)² I,
+    # and its optical depth scaled per axis so that what it absorbs over its whole cross-section stays the same.
+    a6 = g["inv6"].astype(np.float64)
+    inv = np.stack([np.stack([a6[:, 0], a6[:, 3], a6[:, 4]], 1), np.stack([a6[:, 3], a6[:, 1], a6[:, 5]], 1),
+                    np.stack([a6[:, 4], a6[:, 5], a6[:, 2]], 1)], 1)
+    cov = np.linalg.inv(inv)
+    cov2 = cov + np.eye(3) * (0.5 * voxel) ** 2
+    inv2 = np.linalg.inv(cov2)
+    dd, dd2 = np.diagonal(inv, axis1=1, axis2=2), np.diagonal(inv2, axis1=1, axis2=2)
+    fac = np.sqrt(np.linalg.det(cov)[:, None] * dd / (np.linalg.det(cov2)[:, None] * dd2)).astype(np.float32)
+    g = dict(g, inv6=np.stack([inv2[:, 0, 0], inv2[:, 1, 1], inv2[:, 2, 2], inv2[:, 0, 1], inv2[:, 0, 2], inv2[:, 1, 2]],
+                              1).astype(np.float32),
+             sig=np.sqrt(np.diagonal(cov2, axis1=1, axis2=2)).astype(np.float32))
+    del a6, inv, cov, cov2, inv2, dd, dd2
     rad = np.ceil(3.0 * g["sig"] / voxel).astype(int)
     rad = _RADII[np.minimum(np.searchsorted(_RADII, rad), len(_RADII) - 1)].astype(np.int32)
-    _G.update(xyz=g["xyz"], inv6=g["inv6"], tau=-np.log1p(-np.minimum(g["alpha"], 0.99)), rad=rad, step=voxel,
+    _G.update(fac=fac, xyz=g["xyz"], inv6=g["inv6"], tau=-np.log1p(-np.minimum(g["alpha"], 0.99)), rad=rad, step=voxel,
               lo=lo.astype(np.float32), blur=blur, air=air, air_lo=air_lo, air_step=air_step)
     n = np.ceil((hi - lo) / voxel).astype(int) + 1
     tn = np.ceil(n / tile).astype(int)
@@ -437,12 +471,13 @@ def _ears(P):
 
 
 def fill_holes(tm: trimesh.Trimesh, max_size: float, flat: float, g: dict | None = None, depth: float = 0.0,
-               opaque: float = 0.5, max_loop: int = 3000, log=print):
+               opaque: float = 0.5, pore: float = 0.0, max_loop: int = 3000, log=print):
     """Flat holes closed. Where the splat has nothing (a patch no camera saw) the skin has a hole, and through it
     the back of the room shows. A boundary loop is closed when it is no wider than max_size, lies within `flat` of
     its own plane (a hole in a wall, not the edge of a reveal or of the shell) and has nothing behind it. With the
     gaussians `g`, a hole is an opening of the room, and stays, when the splat goes on behind it: the gaussians up
-    to `depth` behind the hole's plane cover at least `opaque` of it (a window's bars, what is outside).
+    to `depth` behind the hole's plane cover at least `opaque` of it (a window's bars, what is outside). A hole
+    no wider than `pore` is closed whatever lies behind: a wall is thick, and its own gaussians are behind its pores.
     The loop is triangulated in its plane; its vertices stay where they are.
     Returns (mesh, {"closed", "openings", "other"})."""
     vfn = None
@@ -478,7 +513,7 @@ def fill_holes(tm: trimesh.Trimesh, max_size: float, flat: float, g: dict | None
             continue
         p2 = (P - c) @ vt[:2].T
         area2 = float((p2[:, 0] * np.roll(p2[:, 1], -1) - np.roll(p2[:, 0], -1) * p2[:, 1]).sum())
-        if g is not None:
+        if g is not None and np.ptp((P - c) @ vt[0]) > pore:
             out_ = -vfn[loop].mean(0)                              # away from the room
             n = vt[2] * (1.0 if vt[2] @ out_ > 0 else -1.0)
             rad = float(np.linalg.norm(p2, axis=1).max())
@@ -510,7 +545,7 @@ def fill_holes(tm: trimesh.Trimesh, max_size: float, flat: float, g: dict | None
 
 
 def flatten(tm: trimesh.Trimesh, gd, noise: float = 2.5, min_share: float = 0.02, rings: int = 6,
-            small: float = 0.01, smooth: int = 12, log=print):
+            small: float = 0.01, smooth: int = 12, thin: float = 0.0, minor: float = 0.0, reach: float = 0.0, log=print):
     """The room's large planes made plane. A splat's wall is a noisy sheet; a built wall is flat. Each large
     connected patch of one of the guide's planes gets a robust quadratic fit of its height over the patch (so a
     wall that leans or bows a little keeps doing so); the vertices within `noise` robust deviations of the fit move
@@ -518,7 +553,10 @@ def flatten(tm: trimesh.Trimesh, gd, noise: float = 2.5, min_share: float = 0.02
     step between. Two refinements: a patch also takes the vertices `rings` edges around it, so at a corner a vertex
     that faces both walls is put on both and the corner comes out a straight line; and what stands out but covers less than
     `small` of the patch (a lump of gaussians, not a feature of the room) is flattened too. A patch that lies on
-    a plane already fitted (a wall cut in two by a niche) takes that plane's fit.
+    a plane already fitted (a wall cut in two by a niche) takes that plane's fit. What stands out in a strip
+    narrower than `thin` (scene units: a ridge, a thread of gaussians) is flattened as well. Patches down to
+    `minor` of the area (a jamb, a sill) are made plane too, when they are as flat as the large ones. `reach`
+    (scene units) widens `rings` on a fine mesh: a lump wider than the rings is not reached to its middle.
     Returns (mesh, [what was done to each patch])."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
@@ -538,9 +576,13 @@ def flatten(tm: trimesh.Trimesh, gd, noise: float = 2.5, min_share: float = 0.02
         vn = vn + VV @ vn
         vn /= np.maximum(np.linalg.norm(vn, axis=1, keepdims=True), 1e-12)
     done, fits = [], []
+    edge = max(float(np.median(tm.edges_unique_length)), 1e-9)
+    k_thin = int(np.ceil(thin / edge / 2)) if thin > 0 else 0
+    rings = max(rings, int(np.ceil(reach / edge)))
     for c in np.argsort(-area):
-        if area[c] < min_share * tm.area:
+        if area[c] < min(min_share, minor or min_share) * tm.area:
             break
+        is_minor = area[c] < min_share * tm.area
         fsel = np.nonzero((comp == c) & face_on)[0]
         core = np.zeros(nv, np.float32); core[np.unique(tm.faces[fsel])] = 1
         axis = int(lab[fsel[0]] // 2)
@@ -565,6 +607,8 @@ def flatten(tm: trimesh.Trimesh, gd, noise: float = 2.5, min_share: float = 0.02
                 r = h - A @ coef
                 sig = 1.4826 * np.median(np.abs(r[w > 0.1])) + 1e-12
                 w = np.clip(1 - (r / (4.685 * sig)) ** 2, 0, 1)
+            if is_minor and fits and sig > 2 * np.median([f[3] for f in fits]):
+                continue                                       # not a plane: left as it is
             fits.append((lab[fsel[0]], design, coef, sig))
         grown = core
         for _ in range(rings):                                 # the patch and the vertices a few edges around it
@@ -578,6 +622,16 @@ def flatten(tm: trimesh.Trimesh, gd, noise: float = 2.5, min_share: float = 0.02
         pull *= f_ * f_ * (3 - 2 * f_)
         # what stands out in small pieces is noise as well
         outl = np.zeros(nv, bool); outl[vid[pull < 0.999]] = True
+        if k_thin:                                             # and in narrow strips: opened away, where it faces the plane
+            own = np.zeros(nv, bool); own[vid] = True
+            wide = outl | ~own
+            for _ in range(k_thin):
+                wide &= (VV @ (~wide).astype(np.float32)) == 0
+            for _ in range(k_thin + 1):
+                wide = (wide | ((VV @ wide.astype(np.float32)) > 0)) & (outl | ~own)
+            strip = outl & ~wide & (np.abs(vn[:, axis]) > 0.6)
+            pull = np.where(strip[vid], 1.0, pull)
+            outl &= ~strip
         ee = e[outl[e[:, 0]] & outl[e[:, 1]]]
         if len(ee):
             _, cl = connected_components(coo_matrix((np.ones(len(ee), bool), ee.T), shape=(nv, nv)), directed=False)

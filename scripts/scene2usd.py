@@ -14,7 +14,7 @@ the same input and surface options only bakes again.
 
 Writes OUT_DIR/scene.usda (variantSet "lod": lod0 … lodN, each a reference to lodK.usdc with its maps:
 lodK_basecolor, _normal (tangent space), _occlusion, _height; `.png`, or `.<UDIM>.png` tiles 1001, 1002 … when the
-density needs more than one tile), OUT_DIR/render and render_base (the views), fidelity_lodK.jpg (the splat as baked from | the mesh, from the
+density needs more than one tile), OUT_DIR/render and render_base (the views, NAME.rgba.png: 8-bit sRGB and alpha), fidelity_lodK.jpg (the splat as baked from | the mesh, from the
 station kept out), preview_lodK*.png (the mesh from the first station; lit with and without the normal map),
 uv_checker_lodK.png (the UVs as a checker of equal world squares) and report.json (mesh, UV and fidelity numbers).
 --up names the file's up axis; the USD is written Y-up.
@@ -59,6 +59,8 @@ ap.add_argument("--colour", default="base", choices=["base", "full"], help="base
                 "the splat without its view-dependent colour (they agree with one another); full: from the splat as it is")
 ap.add_argument("--mix", default="mean", choices=["mean", "best"], help="a texel's colour: the mean of the stations "
                 "that see it, or the one that sees it best")
+ap.add_argument("--cleanup", action="store_true", help="when done, delete what a new run can make again in minutes: "
+                "the whole splat's views but the check station's, and base_colour.ply")
 ap.add_argument("--fresh", action="store_true", help="do not reuse OUT_DIR/mesh.npz of an earlier run")
 ap.add_argument("--default-lod", type=int, default=1)
 ap.add_argument("--no-detail", action="store_true", help="no normal, height and occlusion maps")
@@ -114,9 +116,9 @@ else:
         rep["seen"] = scene.stats(raw)
     gd = scene.guide(coarse(raw))      # the coarsest LOD's planes: they give every LOD its islands
     if a.flatten > 0:
-        raw, rep["planes"] = scene.flatten(raw, gd, a.flatten, log=log)
+        raw, rep["planes"] = scene.flatten(raw, gd, a.flatten, thin=0.008 * diag, minor=0.002, reach=0.03 * diag, log=log)
     if a.fill_holes > 0:
-        raw, rep["holes"] = scene.fill_holes(raw, a.fill_holes * diag, 4 * voxel, g, 0.15 * diag, log=log)
+        raw, rep["holes"] = scene.fill_holes(raw, a.fill_holes * diag, 4 * voxel, g, 0.15 * diag, pore=0.02 * diag, log=log)
     del g
     rep["surface"] = scene.stats(raw)
     np.savez(cache, v=raw.vertices.astype(np.float32), f=raw.faces.astype(np.int32), pts=pts, voxel=voxel, diag=diag,
@@ -250,4 +252,11 @@ rep["tangent_space"] = ("per-vertex tangents computed the MikkTSpace way (angle-
 scene.write_lods(out, lods, a.default_lod)
 rep.update(lods=lods, t_total_s=round(time.time() - t0, 1))
 (out / "report.json").write_text(json.dumps(rep, indent=2))
+if a.cleanup:
+    keep = {v["name"] for v in cams["views"][-6:]}
+    if a.colour == "base":
+        for f in (rdir / "views").glob("*.rgba.png"):
+            if f.name[:-9] not in keep:
+                f.unlink()
+        (bdir.parent / "base_colour.ply").unlink(missing_ok=True)
 log(f"wrote {out / 'scene.usda'} in {rep['t_total_s']} s")
