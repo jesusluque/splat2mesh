@@ -1159,15 +1159,17 @@ def to_the_picture(tm: trimesh.Trimesh, sts: list[dict], occluder, off: float, r
         h_v = 0.5 * h_v + 0.5 * (A @ h_v)
         h_v = np.sign(h_v) * np.minimum(np.abs(h_v), room)
     F, fn0 = np.asarray(tm.faces), np.asarray(tm.face_normals)
-    for _ in range(4):                                         # where the move would turn a face over, it is undone
-        T = (V + VN * h_v[:, None])[F]
+    for _ in range(6):                                         # where the move would turn a face over it is held back,
+        T = (V + VN * h_v[:, None])[F]                         # and its neighbours eased towards it: no step is left
         fn1 = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
         fn1 /= np.maximum(np.linalg.norm(fn1, axis=1, keepdims=True), 1e-30)
         bad = np.unique(F[(fn1 * fn0).sum(1) < 0.0])
         if len(bad) == 0:
             break
-        keep = np.ones(len(V)); keep[bad] = 0
-        h_v = h_v * np.minimum(keep, A @ keep)                 # and eased back around it
+        room[bad] = 0
+        for _ in range(30):
+            h_v = 0.5 * h_v + 0.5 * (A @ h_v)
+            h_v = np.sign(h_v) * np.minimum(np.abs(h_v), room)
     moved = trimesh.Trimesh(V + VN * h_v[:, None], tm.faces, process=False)
     w0 = wc.sum()
     cnts, edges = np.histogram(h_v, bins=9, range=(-reach, reach))
