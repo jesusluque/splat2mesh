@@ -66,6 +66,9 @@ ap.add_argument("--only", default=None, help="bake from these stations alone: th
                 "from near where it was captured); or auto, all but those that agree far less than the rest")
 ap.add_argument("--then", default=None, help="stations (numbers, or top:N) that colour what those of --only do not "
                 "see, by their mean")
+ap.add_argument("--sweep", type=float, default=0.0, help="the surface is moved to where the splat paints it: along "
+                "its normal, up to this share of the box's diagonal either way, to the depth at which the stations' "
+                "colours differ least (0: off; 0.02 is a start). It takes away the double image of a mean of stations")
 ap.add_argument("--front", type=float, default=0.0, help="experimental: scene units a pixel of front views, every "
                 "plane rendered head on and baked from that view (0: none). A splat seen from where it was not "
                 "captured can be full of specks, and then so are these")
@@ -198,6 +201,16 @@ if a.only:
     rep["stations_only"] = chosen(a.only)
     log(f"baking from stations {rep['stations_only']}" + (f", then {chosen(a.then)}" if a.then else ""))
     sts = [sts[i] for i in rep["stations_only"]]
+if a.sweep > 0 and len(sts) > 1:        # the surface to where the stations' pictures agree
+    t1 = time.time()
+    raw, sw = scene.to_the_picture(raw, sts, occ, 2 * voxel, a.sweep * diag, 0.02 * diag)
+    occ = o3d.t.geometry.RaycastingScene()
+    occ.add_triangles(raw.vertices.astype(np.float32), raw.faces.astype(np.uint32))
+    gd = scene.guide(coarse(raw))
+    rep["sweep"] = dict(sw, reach=a.sweep * diag, t_s=round(time.time() - t1, 1))
+    log(f"surface moved to the picture: the stations differ {sw['cost_at_mesh']:.5f} at the skin, {sw['cost_at_h']:.5f} at "
+        f"the depth chosen; median move {sw['h_median']:.3f}, from {-a.sweep * diag:.2f} to {a.sweep * diag:.2f}: "
+        f"{sw['h_hist'][0]}  ({rep['sweep']['t_s']} s)")
 fronts, fcams = [], None
 fpx = a.front
 if fpx > 0:                            # the planes head on; they follow the surface, so a new surface renders them anew
@@ -255,10 +268,14 @@ for k, (nf, res, den) in enumerate(zip(faces, texs, dens)):
         else:
             col, cov = scene.bake(pos, nrm, rest, sts, occ, off=2 * voxel,
                                   **({} if a.mix == "mean" else dict(keep=2, tries=4, cos_power=4.0, dist_power=2.0, sharp=3.0)))
-        if sts_then:                                           # what the chosen stations do not see: the others' mean
-            col2, cov2 = scene.bake(pos, nrm, rest & ~cov, sts_then, occ, off=2 * voxel)
-            col[cov2] = col2[cov2]; cov |= cov2
-            del col2, cov2
+        if sts_then:                                           # what the chosen stations do not see: the others' mean,
+            from scipy.ndimage import gaussian_filter          # faded in over a band inside what they do see
+            w = np.clip((gaussian_filter(cov.astype(np.float32), max(2.0, 0.004 * diag * tpu)) - 0.5) / 0.45, 0, 1)
+            w[~cov] = 0
+            col2, cov2 = scene.bake(pos, nrm, rest & (w < 1), sts_then, occ, off=2 * voxel)
+            w[cov & ~cov2] = 1
+            col = col * w[..., None] + col2 * (1 - w[..., None]); cov |= cov2
+            del col2, cov2, w
         if fronts:
             col[covf] = colf[covf]; cov |= covf; front_n += int(covf.sum())
             del colf, covf

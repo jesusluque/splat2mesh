@@ -1075,6 +1075,107 @@ def station_agreement(tm: trimesh.Trimesh, sts: list[dict], occluder, off: float
     return score, C
 
 
+def to_the_picture(tm: trimesh.Trimesh, sts: list[dict], occluder, off: float, reach: float, cell: float,
+                   steps: int = 17, n: int = 400_000, smooth: float = 1.5):
+    """The surface moved to where the splat paints it. The skin is where the room's air stops seeing, and the
+    picture a station sees on a wall lies a little behind or before it; a station then projects the picture onto
+    the mesh shifted by that depth times the tangent of its view angle, each station its own way, and their mean
+    shows everything twice. At n points of the surface the stations are read at the point moved by h along its
+    normal, h from -reach to +reach in `steps`; the cost of an h is the variance of the colours they give. One h is
+    not found per point (where a wall is bare any h does): the costs are summed over cells of `cell` scene units,
+    apart for each of the six ways a surface can face, and smoothed over `smooth` cells; a cell takes the h of
+    least cost (0 unless another is clearly better); the vertices move along their normals by the h interpolated
+    between cells. Returns (mesh, {"cost_at_mesh", "cost_at_h", "h_hist": (counts, edges), "h_median"})."""
+    import open3d as o3d
+    from scipy.ndimage import gaussian_filter, map_coordinates
+    S = len(sts)
+    P, fi = trimesh.sample.sample_surface(tm, n, seed=0)
+    N = tm.face_normals[fi]
+    W = np.zeros((S, n), bool)
+    org = P + N * off
+    for k, st in enumerate(sts):
+        to = st["eye"] - org
+        ln = np.linalg.norm(to, axis=1)
+        rays = np.concatenate([org, to / ln[:, None]], 1).astype(np.float32)
+        W[k] = ((to * N).sum(1) / ln > 0.05) & (occluder.cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy() >= ln)
+    multi = W.sum(0) >= 2
+    seen = [np.nonzero(W[k] & multi)[0] for k in range(S)]
+    lo = tm.vertices.min(0) - cell
+    dims = np.ceil((tm.vertices.max(0) + cell - lo) / cell).astype(int) + 1
+    way = _dominant(N)                                         # 0..5
+    cid = np.ravel_multi_index(np.floor((P - lo) / cell).astype(int).T, dims) + way * int(dims.prod())
+    size = 6 * int(dims.prod())
+    hs = np.linspace(-reach, reach, steps)
+    cost = np.zeros((steps, 6) + tuple(dims), np.float32); wgt = np.zeros_like(cost)
+    for ih, h in enumerate(hs):
+        s1 = np.zeros((n, 3), np.float32); s2 = np.zeros(n, np.float32); cnt = np.zeros(n, np.float32)
+        for k in range(S):
+            col, ok = _sample_station(sts[k], P[seen[k]] + N[seen[k]] * h)
+            m = seen[k][ok]
+            s1[m] += col[ok]; s2[m] += (col[ok] ** 2).sum(1); cnt[m] += 1
+        two = cnt >= 2
+        var = (s2[two] - (s1[two] ** 2).sum(1) / cnt[two]) / cnt[two]
+        c = np.bincount(cid[two], var, size).reshape((6,) + tuple(dims))
+        w = np.bincount(cid[two], minlength=size).reshape((6,) + tuple(dims)).astype(np.float32)
+        for d in range(6):
+            cost[ih, d] = gaussian_filter(c[d].astype(np.float32), smooth); wgt[ih, d] = gaussian_filter(w[d], smooth)
+    full = wgt.min(0) > 0.5                                    # cells with points at every h
+    mean = np.where(wgt > 0.5, cost / np.maximum(wgt, 1e-6), np.inf)
+    i0 = steps // 2
+    arg = np.full(mean.shape[1:], i0)
+    bestc = mean[i0].copy()
+    for ih in sorted(range(steps), key=lambda i: abs(i - i0)):
+        better = mean[ih] < 0.95 * bestc
+        bestc[better] = mean[ih][better]; arg[better] = ih
+    hc = np.where(full, hs[arg], 0).astype(np.float32)
+    wc = np.where(full, wgt[i0], 0)
+    fields = []
+    for d in range(6):                                         # h between cells, and carried into the cells without
+        num = gaussian_filter(hc[d] * wc[d], smooth); den = gaussian_filter(wc[d], smooth)
+        fields.append(np.where(den > 1e-6, num / np.maximum(den, 1e-6), 0))
+    import scipy.sparse as sp
+    V, VN = np.asarray(tm.vertices, np.float64), np.asarray(tm.vertex_normals, np.float64)
+    e = tm.edges_unique
+    A = sp.coo_matrix((np.ones(len(e) * 2), (np.r_[e[:, 0], e[:, 1]], np.r_[e[:, 1], e[:, 0]])), shape=(len(V),) * 2).tocsr()
+    A = sp.diags(1.0 / np.maximum(np.asarray(A.sum(1)).ravel(), 1)) @ A
+    for _ in range(8):                                         # the way to move: the normal without the skin's noise
+        VN = 0.5 * VN + 0.5 * (A @ VN)
+    VN /= np.maximum(np.linalg.norm(VN, axis=1, keepdims=True), 1e-12)
+    coords = ((V - lo) / cell - 0.5).T
+    h_v = np.zeros(len(V))
+    for ax in range(3):                                        # a vertex between two ways takes of both, by its normal
+        for neg in (0, 1):
+            m = (VN[:, ax] < 0) == bool(neg)
+            if m.any():
+                h_v[m] += VN[m, ax] ** 2 * map_coordinates(fields[ax * 2 + neg], coords[:, m], order=1, mode="nearest")
+    room = np.full(len(V), np.inf)                             # a bar, a jamb: no further than 0.4 of what lies that way
+    for sgn in (-1.0, 1.0):
+        m = np.nonzero(h_v * sgn > 0)[0]
+        if len(m):
+            rays = np.concatenate([V[m] + VN[m] * sgn * off, VN[m] * sgn], 1).astype(np.float32)
+            room[m] = 0.4 * (occluder.cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy() + off)
+    h_v = np.sign(h_v) * np.minimum(np.abs(h_v), room)
+    for _ in range(6):                                         # neighbours move together, and never further than allowed
+        h_v = 0.5 * h_v + 0.5 * (A @ h_v)
+        h_v = np.sign(h_v) * np.minimum(np.abs(h_v), room)
+    F, fn0 = np.asarray(tm.faces), np.asarray(tm.face_normals)
+    for _ in range(4):                                         # where the move would turn a face over, it is undone
+        T = (V + VN * h_v[:, None])[F]
+        fn1 = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
+        fn1 /= np.maximum(np.linalg.norm(fn1, axis=1, keepdims=True), 1e-30)
+        bad = np.unique(F[(fn1 * fn0).sum(1) < 0.0])
+        if len(bad) == 0:
+            break
+        keep = np.ones(len(V)); keep[bad] = 0
+        h_v = h_v * np.minimum(keep, A @ keep)                 # and eased back around it
+    moved = trimesh.Trimesh(V + VN * h_v[:, None], tm.faces, process=False)
+    w0 = wc.sum()
+    cnts, edges = np.histogram(h_v, bins=9, range=(-reach, reach))
+    return moved, {"cost_at_mesh": float((np.where(full, mean[i0], 0) * wc).sum() / max(w0, 1e-9)),
+                   "cost_at_h": float((np.where(full, bestc, 0) * wc).sum() / max(w0, 1e-9)),
+                   "h_median": float(np.median(h_v)), "h_hist": (cnts.tolist(), [round(float(e), 4) for e in edges])}
+
+
 def bake_pick(pos, nrm, mask, sts: list[dict], occluder, off: float, sigma: float, chunk: int = 1_500_000):
     """Texel colour from one station, the one that agrees best with the rest around the texel. A splat is clean only
     from near where it was captured: elsewhere it shows specks, and the mean of all stations is a blur of them. A
