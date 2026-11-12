@@ -63,6 +63,8 @@ ap.add_argument("--mix", default="mean", choices=["mean", "best", "pick"], help=
                 "the one that agrees best with the rest around the texel, unmixed (experimental)")
 ap.add_argument("--only", default=None, help="bake from these stations alone (their numbers, with commas): the ones "
                 "from which the splat looks clean")
+ap.add_argument("--then", default=None, help="stations (numbers, with commas) that colour what those of --only do "
+                "not see, by their mean")
 ap.add_argument("--front", type=float, default=0.0, help="experimental: scene units a pixel of front views, every "
                 "plane rendered head on and baked from that view (0: none). A splat seen from where it was not "
                 "captured can be full of specks, and then so are these")
@@ -168,6 +170,7 @@ else:
     full = sts[-1:]
 check, sts = (sts[-1], sts[:-1]) if len(sts) == n_all else (None, sts)
 check_full = full[0] if check is not None and full else None
+sts_then = [sts[int(i)] for i in a.then.split(",")] if a.then else []
 if a.only:
     sts = [sts[int(i)] for i in a.only.split(",")]
 rep.update(colour=a.colour, stations_baked=len(sts), check_station=check is not None, t_render_s=round(time.time() - t1, 1))
@@ -234,6 +237,10 @@ for k, (nf, res, den) in enumerate(zip(faces, texs, dens)):
         else:
             col, cov = scene.bake(pos, nrm, rest, sts, occ, off=2 * voxel,
                                   **({} if a.mix == "mean" else dict(keep=2, tries=4, cos_power=4.0, dist_power=2.0, sharp=3.0)))
+        if sts_then:                                           # what the chosen stations do not see: the others' mean
+            col2, cov2 = scene.bake(pos, nrm, rest & ~cov, sts_then, occ, off=2 * voxel)
+            col[cov2] = col2[cov2]; cov |= cov2
+            del col2, cov2
         if fronts:
             col[covf] = colf[covf]; cov |= covf; front_n += int(covf.sum())
             del colf, covf
