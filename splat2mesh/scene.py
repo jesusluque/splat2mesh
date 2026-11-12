@@ -11,13 +11,18 @@ semi-transparent ones), so the opacity field itself has no clean level set. Here
      (transmittance 0.5): one definition for the whole room, evaluated on a lattice in tiles (CPU), open where the
      air sees no wall, with nothing filled or capped. A splat's rendered depths are not used for this: they are
      means over semi-transparent gaussians and differ from view to view;
-  4. small pieces go, the room's large planes are made plane (what stands out of them stays) and the mesh is
-     decimated into the LODs;
-  5. athenea renders the splat's colour from each station as a cube of wide views;
-  6. each LOD gets UVs by planar projection onto the room's planes (islands packed on shelves, over several
-     UDIM tiles when the density asks), a base colour taken for every texel from the station that sees it best,
-     and the detail the decimation lost as normal, height and occlusion maps baked from the finest mesh. One
-     station is kept out of the bake: the mesh is compared with the splat's own views from it (PSNR, SSIM).
+  4. small pieces go, and so does what no point of the room's air can see (the back of a sheet, second layers);
+     the room's large planes are made plane (what stands out of them stays), flat holes with nothing of the splat
+     behind them are closed (a patch no camera saw; a window, with its bars and the street behind, stays open),
+     and the mesh is decimated into the LODs;
+  5. athenea renders the splat from each station as a cube of wide views, without its view-dependent colour (the
+     spherical harmonics above degree 0 set to zero): views of the whole splat do not agree with one another,
+     the same wall can be far brighter from one place than from another, and no texture can match them all;
+  6. each LOD gets UVs by planar projection onto the room's planes (islands packed over several UDIM tiles when
+     the density asks), a base colour that is, for every texel, the mean of the stations that see it, and the
+     detail the decimation lost as normal, height and occlusion maps baked from the finest mesh. One station is
+     kept out of the bake: the mesh is compared from it with the splat's views, the ones without view-dependent
+     colour (what a texture can reach) and the whole splat's (PSNR, SSIM).
 """
 from __future__ import annotations
 
@@ -81,6 +86,24 @@ def up_matrix(up: str) -> np.ndarray:
             "x": np.array([[0, -1.0, 0], [1, 0, 0], [0, 0, 1]]), "-x": np.array([[0, 1.0, 0], [-1, 0, 0], [0, 0, 1]])}[up]
 
 
+def base_colour_copy(ply, dst) -> Path:
+    """A copy of a splat's .ply with its view-dependent colour removed (the f_rest_* harmonics set to zero): every
+    gaussian keeps its mean colour. Views of it agree with one another, which views of the whole splat do not
+    (the same wall can be far brighter from one place than from another), so a texture can be baked from them."""
+    raw = Path(ply).read_bytes()
+    i = raw.index(b"end_header\n") + 11
+    head = raw[:i].decode("ascii", "replace")
+    if "binary_little_endian" not in head:
+        raise ValueError(f"{ply}: only binary little-endian .ply")
+    props = [l.split() for l in head.splitlines() if l.startswith("property")]
+    if any(w[1] != "float" for w in props):
+        raise ValueError(f"{ply}: a vertex property that is not float")
+    a = np.frombuffer(raw[i:], np.float32).reshape(-1, len(props)).copy()
+    a[:, [k for k, w in enumerate(props) if w[2].startswith("f_rest")]] = 0
+    Path(dst).write_bytes(raw[:i] + a.tobytes())
+    return Path(dst)
+
+
 # ---------------------------------------------------------------- the room's air
 def room_air(g: dict, step: float, solid_alpha: float = 0.5, need: int = 5):
     """Coarse grid: solid = cells holding enough opacity; air of the room = free cells with solid somewhere along
@@ -105,12 +128,13 @@ def room_air(g: dict, step: float, solid_alpha: float = 0.5, need: int = 5):
 
 
 # ---------------------------------------------------------------- stations and views
-def stations(air, lo, step, n: int = 6) -> np.ndarray:
+def stations(air, lo, step, n: int = 6, inner: float = 0.45) -> np.ndarray:
     """n points in the room's air: the first where the walls are farthest, each next one the cell that is far from
-    the walls and from the stations already chosen."""
+    the walls and from the stations already chosen. Only cells at least `inner` × the largest distance to a wall
+    are taken (a splat seen from close to a wall falls apart)."""
     from scipy import ndimage as ndi
     dist = ndi.distance_transform_edt(air)
-    cells = np.argwhere(dist >= 0.45 * dist.max())
+    cells = np.argwhere(dist >= inner * dist.max())
     dw = dist[tuple(cells.T)]
     pts = [cells[int(np.argmax(dw))]]
     for _ in range(n - 1):
@@ -349,6 +373,140 @@ def drop_small(tm: trimesh.Trimesh, min_area_frac: float = 0.0005) -> trimesh.Tr
     keep = area[lab] >= min_area_frac * area.sum()
     out = tm.submesh([np.nonzero(keep)[0]], append=True, repair=False)
     return trimesh.Trimesh(out.vertices, out.faces, process=False)
+
+
+def seen(tm: trimesh.Trimesh, probes, off: float, grow: int = 2, log=print) -> trimesh.Trimesh:
+    """Only what can be seen from the room. The skin also wraps what lies behind the walls (the back of a sheet,
+    a second layer, pockets): faces no point of the room's air sees from their front. They take atlas, break the
+    UV islands and are never coloured. A face stays when a ray from its centre (lifted `off` along the normal)
+    reaches one of the `probes` free, or when it is within `grow` faces of one that does."""
+    import open3d as o3d
+    from scipy.sparse import coo_matrix
+    sc = o3d.t.geometry.RaycastingScene()
+    sc.add_triangles(tm.vertices.astype(np.float32), tm.faces.astype(np.uint32))
+    fn = tm.face_normals
+    org = tm.triangles_center + fn * off
+    vis = np.zeros(len(tm.faces), bool)
+    for p in probes:
+        idx = np.nonzero(~vis)[0]
+        to = p - org[idx]
+        ln = np.linalg.norm(to, axis=1)
+        m = (to * fn[idx]).sum(1) > 0.02 * ln
+        idx, to, ln = idx[m], to[m], ln[m]
+        rays = np.concatenate([org[idx], to / ln[:, None]], 1).astype(np.float32)
+        vis[idx[sc.cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy() >= ln]] = True
+    direct = float(tm.area_faces[vis].sum() / tm.area)
+    adj = tm.face_adjacency
+    A = coo_matrix((np.ones(2 * len(adj), np.float32), (np.r_[adj[:, 0], adj[:, 1]], np.r_[adj[:, 1], adj[:, 0]])),
+                   shape=(len(vis),) * 2).tocsr()
+    keep = vis.astype(np.float32)
+    for _ in range(grow):
+        keep = np.minimum(keep + A @ keep, 1)
+    out = tm.submesh([np.nonzero(keep > 0)[0]], append=True, repair=False)
+    log(f"    seen from the room: {direct:.1%} of the area, kept {tm.area_faces[keep > 0].sum() / tm.area:.1%}")
+    return trimesh.Trimesh(out.vertices, out.faces, process=False)
+
+
+def _ears(P):
+    """Ear clipping of a simple polygon P (n×2, counter-clockwise). Returns triangles as rows of indices into P."""
+    idx = list(range(len(P)))
+    tris = []
+
+    def cr(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    guard = 0
+    while len(idx) > 3 and guard < 4 * len(P):
+        n = len(idx)
+        for i in range(n):
+            a, b, c = idx[i - 1], idx[i], idx[(i + 1) % n]
+            if cr(P[a], P[b], P[c]) <= 0:
+                continue
+            rest = np.array([j for j in idx if j not in (a, b, c)])
+            if len(rest):
+                Q = P[rest]
+                ins = ((cr(P[a], P[b], Q.T) > 0) & (cr(P[b], P[c], Q.T) > 0) & (cr(P[c], P[a], Q.T) > 0))
+                if ins.any():
+                    continue
+            tris.append((a, b, c)); idx.pop(i)
+            break
+        else:
+            return None                                        # not simple: left open
+        guard += 1
+    tris.append(tuple(idx))
+    return np.array(tris)
+
+
+def fill_holes(tm: trimesh.Trimesh, max_size: float, flat: float, g: dict | None = None, depth: float = 0.0,
+               opaque: float = 0.5, max_loop: int = 3000, log=print):
+    """Flat holes closed. Where the splat has nothing (a patch no camera saw) the skin has a hole, and through it
+    the back of the room shows. A boundary loop is closed when it is no wider than max_size, lies within `flat` of
+    its own plane (a hole in a wall, not the edge of a reveal or of the shell) and has nothing behind it. With the
+    gaussians `g`, a hole is an opening of the room, and stays, when the splat goes on behind it: the gaussians up
+    to `depth` behind the hole's plane cover at least `opaque` of it (a window's bars, what is outside).
+    The loop is triangulated in its plane; its vertices stay where they are.
+    Returns (mesh, {"closed", "openings", "other"})."""
+    vfn = None
+    if g is not None:
+        from scipy.spatial import cKDTree
+        tree = cKDTree(g["xyz"])
+        vfn = tm.vertex_normals
+    openings = 0
+    e = tm.edges_sorted
+    be = tm.edges[trimesh.grouping.group_rows(e, require_count=1)]         # directed as their face has them
+    nxt = {}
+    multi = set()
+    for a, b in be:
+        if a in nxt:
+            multi.add(a)
+        nxt[int(a)] = int(b)
+    add, closed, left = [], 0, 0
+    done = set()
+    for a0 in list(nxt):
+        if a0 in done:
+            continue
+        loop, a = [], a0
+        while a not in done and a in nxt and len(loop) <= max_loop:
+            done.add(a); loop.append(a); a = nxt[a]
+        if a != a0 or len(loop) < 3 or len(loop) > max_loop or multi & set(loop):
+            left += 1
+            continue
+        P = tm.vertices[loop]
+        c = P.mean(0)
+        _, sv, vt = np.linalg.svd(P - c, full_matrices=False)
+        if np.ptp((P - c) @ vt[0]) > max_size or np.abs((P - c) @ vt[2]).max() > flat:
+            left += 1
+            continue
+        p2 = (P - c) @ vt[:2].T
+        area2 = float((p2[:, 0] * np.roll(p2[:, 1], -1) - np.roll(p2[:, 0], -1) * p2[:, 1]).sum())
+        if g is not None:
+            out_ = -vfn[loop].mean(0)                              # away from the room
+            n = vt[2] * (1.0 if vt[2] @ out_ > 0 else -1.0)
+            rad = float(np.linalg.norm(p2, axis=1).max())
+            near = np.asarray(tree.query_ball_point(c + n * depth / 2, np.hypot(rad, depth / 2)), int)
+            if len(near):
+                rel = g["xyz"][near] - c
+                h = rel @ n
+                q = rel @ vt[:2].T
+                m = (h > flat) & (h < depth) & (np.linalg.norm(q, axis=1) < rad)
+                var = g["sig"][near][m].astype(np.float64) ** 2
+                cross = 2 * np.pi * np.sqrt((var @ vt[0] ** 2) * (var @ vt[1] ** 2))
+                if float((g["alpha"][near][m] * cross).sum()) > opaque * abs(area2) / 2:
+                    openings += 1
+                    continue
+        order = np.arange(len(loop)) if area2 > 0 else np.arange(len(loop))[::-1]
+        t = _ears(p2[order])
+        if t is None:
+            left += 1
+            continue
+        t = np.asarray(loop)[order][t]
+        if area2 > 0:                                          # the boundary runs with its faces: the patch against it
+            t = t[:, ::-1]
+        add.append(t); closed += 1
+    log(f"    holes: {closed} closed, {openings} kept as openings (the splat goes on behind), {left} other boundary loops")
+    info = {"closed": closed, "openings": openings, "other": left}
+    if not add:
+        return tm, info
+    return trimesh.Trimesh(tm.vertices, np.concatenate([tm.faces] + add), process=False), info
 
 
 def flatten(tm: trimesh.Trimesh, gd, noise: float = 2.5, min_share: float = 0.02, rings: int = 6,
@@ -766,25 +924,29 @@ def checker(res: int, tpu: float, square: float) -> np.ndarray:
     return (img * 255).astype(np.uint8)
 
 
-def bake(pos, nrm, mask, sts: list[dict], occluder, off: float, keep: int = 2, tries: int = 4, cos_power: float = 4.0,
-         sharp: float = 3.0, chunk: int = 1_500_000):
-    """Texel colour from the station that sees it best. Averaging every view blurs: the mesh is not where each view
-    saw the splat, so their colours land apart. Each station scores cos(angle)^cos_power / distance²; the stations
-    are tried from the best down, a ray to the station tells whether the mesh (`occluder`, an Open3D ray casting
-    scene) is in the way, and the first `keep` that see the texel are mixed by score^sharp (in effect the best one,
-    with a short blend where two score alike). Returns (texture HxWx3, covered HxW)."""
+def bake(pos, nrm, mask, sts: list[dict], occluder, off: float, keep: int | None = None, tries: int | None = None,
+         cos_power: float = 1.0, dist_power: float = 0.0, sharp: float = 1.0, chunk: int = 1_500_000):
+    """Texel colour: the mean of the stations that see it, weighted by the cosine of the view angle. A splat's fine
+    detail is not the same from two places (its gaussians are not on the surface), so the colour one station sees
+    predicts another station's view worse than the mean of all does (compare them with a station kept out:
+    --mix best against --mix mean).
+    Each station scores cos(angle)^cos_power / distance^dist_power; the stations are tried from the best down, a ray
+    to the station tells whether the mesh (`occluder`, an Open3D ray casting scene) is in the way, and the first
+    `keep` that see the texel (default: all) are mixed by score^sharp. keep=2, tries=4, cos_power=4, dist_power=2,
+    sharp=3 is the best single view with a short blend. Returns (texture HxWx3, covered HxW)."""
     import open3d as o3d
     P_all, N_all = pos[mask].astype(np.float64), nrm[mask].astype(np.float64)
     cols = np.zeros((len(P_all), 3), np.float32)
     good = np.zeros(len(P_all), bool)
     eyes = np.stack([s["eye"] for s in sts])
-    tries = min(tries, len(sts))
+    tries = min(tries or len(sts), len(sts))
+    keep = keep or len(sts)
     for a in range(0, len(P_all), chunk):
         P, N = P_all[a:a + chunk], N_all[a:a + chunk]
         d = eyes[None] - P[:, None]                            # n × S × 3
         dist = np.linalg.norm(d, axis=2)
         cos = (d * N[:, None]).sum(2) / np.maximum(dist, 1e-9)
-        score = np.where(cos > 0.05, np.maximum(cos, 0) ** cos_power / np.maximum(dist, 1e-9) ** 2, 0.0)
+        score = np.where(cos > 0.05, np.maximum(cos, 0) ** cos_power / np.maximum(dist, 1e-9) ** dist_power, 0.0)
         order = np.argsort(-score, axis=1)[:, :tries]
         acc = np.zeros((len(P), 3)); ws = np.zeros(len(P)); got = np.zeros(len(P), np.int32)
         org = P + N * off
@@ -867,7 +1029,7 @@ def fidelity(verts, faces, uvs, tiles: list, st: dict, png=None) -> dict:
         rows.append({"view": j, "psnr": round(10 * np.log10(1 / max(mse, 1e-12)), 2), "ssim": round(float(ssim_map[m].mean()), 4),
                      "shared": round(float(m.mean()), 3), "detail": round(detail, 3)})
         if best is None or detail > best[0]:
-            best = (detail, ref, img)
+            best = (detail, np.where(cov[..., None], ref, 0).astype(np.uint8), img)
     if png is not None and best is not None:
         Image.fromarray(np.concatenate([best[1], best[2]], 1)).save(png)
     return {"psnr_mean": round(float(np.mean([r["psnr"] for r in rows])), 2) if rows else None,

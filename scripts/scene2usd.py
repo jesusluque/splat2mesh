@@ -3,15 +3,18 @@
     python scripts/scene2usd.py SCENE.ply OUT_DIR [--up y|z|-y|-z|x|-x] [--stations 16] [--size 2048]
            [--voxel V] [--faces 1500000,500000,100000,20000] [--tex 8192,4096,4096,2048] [--density 36,18,9,4.5]
 
-The room's inner surface is taken from the gaussians on a lattice (CPU), its large planes are made plane, and it is
-decimated into the LODs; cameras are placed inside the room and athenea renders the splat's colour from them (under
-the configured GPU lock); each LOD gets its own atlas: base colour from the station that sees each texel best, and
-normal, height and occlusion maps from the finest mesh. One more station is rendered and kept out of the bake: the
-textured mesh is compared with the splat from it.
+The room's inner surface is taken from the gaussians on a lattice (CPU); what the room cannot see is dropped, its
+large planes are made plane, flat holes with nothing behind are closed, and it is decimated into the LODs. Cameras are
+placed inside the room and athenea renders the splat from them (under the configured GPU lock), by default without
+its view-dependent colour (--colour base: OUT_DIR/base_colour.ply, OUT_DIR/render_base). Each LOD gets its own atlas:
+base colour as the mean of the stations that see each texel, and normal, height and occlusion maps from the finest
+mesh. One more station is rendered and kept out of the bake: the textured mesh is compared from it with the splat
+without view-dependent colour and with the whole splat. The surface is kept in OUT_DIR/mesh.npz: a second run with
+the same input and surface options only bakes again.
 
 Writes OUT_DIR/scene.usda (variantSet "lod": lod0 … lodN, each a reference to lodK.usdc with its maps:
 lodK_basecolor, _normal (tangent space), _occlusion, _height; `.png`, or `.<UDIM>.png` tiles 1001, 1002 … when the
-density needs more than one tile), OUT_DIR/render (the views), fidelity_lodK.jpg (the splat | the mesh, from the
+density needs more than one tile), OUT_DIR/render and render_base (the views), fidelity_lodK.jpg (the splat as baked from | the mesh, from the
 station kept out), preview_lodK*.png (the mesh from the first station; lit with and without the normal map),
 uv_checker_lodK.png (the UVs as a checker of equal world squares) and report.json (mesh, UV and fidelity numbers).
 --up names the file's up axis; the USD is written Y-up.
@@ -48,6 +51,15 @@ ap.add_argument("--density", default=None, help="texels a scene unit, each LOD (
 ap.add_argument("--max-tiles", type=int, default=8)
 ap.add_argument("--crop-pct", type=float, default=1.0, help="percentile of the centres that bounds the scene")
 ap.add_argument("--min-piece", type=float, default=0.0005, help="pieces under this share of the area are dropped")
+ap.add_argument("--probes", type=int, default=128, help="points of the room's air a face must be seen from to stay "
+                "(0: the hidden surface is kept)")
+ap.add_argument("--fill-holes", type=float, default=0.08, help="flat holes up to this share of the box's diagonal are "
+                "closed when the splat has nothing behind them (0: none)")
+ap.add_argument("--colour", default="base", choices=["base", "full"], help="base: the texture is baked from views of "
+                "the splat without its view-dependent colour (they agree with one another); full: from the splat as it is")
+ap.add_argument("--mix", default="mean", choices=["mean", "best"], help="a texel's colour: the mean of the stations "
+                "that see it, or the one that sees it best")
+ap.add_argument("--fresh", action="store_true", help="do not reuse OUT_DIR/mesh.npz of an earlier run")
 ap.add_argument("--default-lod", type=int, default=1)
 ap.add_argument("--no-detail", action="store_true", help="no normal, height and occlusion maps")
 ap.add_argument("--detail-reach", type=float, default=None, help="how far along the normal the fine surface is sought (default 6 voxels)")
@@ -73,23 +85,43 @@ def coarse(m):
     return trimesh.Trimesh(m.vertices, m.faces, process=True)
 
 
-g = scene.load(a.ply, min_opacity=0.005, crop_pct=a.crop_pct)      # in the file's own frame: athenea renders the file
-diag = float(np.linalg.norm(g["hi"] - g["lo"]))
-air, alo, astep = scene.room_air(g, (g["hi"] - g["lo"]).max() / 160)
-pts = scene.stations(air, alo, astep, a.stations + 1)              # the last one: kept out of the bake
-log(f"scene: {len(g['xyz'])} of {g['read']} gaussians, box {(g['hi'] - g['lo']).round(1).tolist()}, "
-    f"air {air.mean():.0%} of it, {a.stations} stations + 1 to check")
-voxel = a.voxel or diag / 600
-raw = scene.skin(g, air, alo, astep, voxel, blur=a.blur, procs=a.procs, log=log)
-raw = scene.drop_small(raw, a.min_piece)
-rep.update(gaussians=int(len(g["xyz"])), stations=pts.round(3).tolist(), voxel=voxel, blur=a.blur, raw=scene.stats(raw),
-           t_skin_s=round(time.time() - t0, 1))
-log(f"skin at voxel {voxel:.4f}: {rep['raw']}  ({rep['t_skin_s']} s)")
-del g
-gd = scene.guide(coarse(raw))          # the coarsest LOD's planes: they give every LOD its islands
-if a.flatten > 0:
-    raw, rep["planes"] = scene.flatten(raw, gd, a.flatten, log=log)
-    gd = scene.guide(coarse(raw))
+src = Path(a.ply)
+key = {"ply": str(src.resolve()), "size": src.stat().st_size, "mtime": src.stat().st_mtime, "voxel": a.voxel, "blur": a.blur,
+       "flatten": a.flatten, "stations": a.stations, "crop_pct": a.crop_pct, "min_piece": a.min_piece, "probes": a.probes,
+       "fill_holes": a.fill_holes}
+cache = out / "mesh.npz"
+if cache.exists() and not a.fresh and json.loads(str(np.load(cache)["key"])) == key:
+    z = np.load(cache)                                               # the surface of an earlier run: only the bake is redone
+    raw, pts, voxel, diag = trimesh.Trimesh(z["v"], z["f"], process=False), z["pts"], float(z["voxel"]), float(z["diag"])
+    rep.update(json.loads(str(z["rep"])))
+    log(f"surface from {cache}: {scene.stats(raw)}")
+else:
+    g = scene.load(a.ply, min_opacity=0.005, crop_pct=a.crop_pct)  # in the file's own frame: athenea renders the file
+    diag = float(np.linalg.norm(g["hi"] - g["lo"]))
+    air, alo, astep = scene.room_air(g, (g["hi"] - g["lo"]).max() / 160)
+    pts = scene.stations(air, alo, astep, a.stations + 1)          # the last one: kept out of the bake
+    log(f"scene: {len(g['xyz'])} of {g['read']} gaussians, box {(g['hi'] - g['lo']).round(1).tolist()}, "
+        f"air {air.mean():.0%} of it, {a.stations} stations + 1 to check")
+    voxel = a.voxel or diag / 600
+    raw = scene.skin(g, air, alo, astep, voxel, blur=a.blur, procs=a.procs, log=log)
+    raw = scene.drop_small(raw, a.min_piece)
+    rep.update(gaussians=int(len(g["xyz"])), stations=pts.round(3).tolist(), voxel=voxel, blur=a.blur, raw=scene.stats(raw),
+               t_skin_s=round(time.time() - t0, 1))
+    log(f"skin at voxel {voxel:.4f}: {rep['raw']}  ({rep['t_skin_s']} s)")
+    if a.probes > 0:                                               # what the room cannot see goes
+        raw = scene.seen(raw, scene.stations(air, alo, astep, a.probes, inner=0.15), 2 * voxel, log=log)
+        raw = scene.drop_small(raw, a.min_piece)
+        rep["seen"] = scene.stats(raw)
+    gd = scene.guide(coarse(raw))      # the coarsest LOD's planes: they give every LOD its islands
+    if a.flatten > 0:
+        raw, rep["planes"] = scene.flatten(raw, gd, a.flatten, log=log)
+    if a.fill_holes > 0:
+        raw, rep["holes"] = scene.fill_holes(raw, a.fill_holes * diag, 4 * voxel, g, 0.15 * diag, log=log)
+    del g
+    rep["surface"] = scene.stats(raw)
+    np.savez(cache, v=raw.vertices.astype(np.float32), f=raw.faces.astype(np.int32), pts=pts, voxel=voxel, diag=diag,
+             key=json.dumps(key), rep=json.dumps(rep))
+gd = scene.guide(coarse(raw))
 
 t1 = time.time()
 cams = scene.cube_views(pts, a.size)
@@ -100,14 +132,30 @@ if a.renders:                                                        # the views
     cams = json.loads(cj.read_text())
     pts = np.array([v["eye"] for v in cams["views"][::6]])
 elif cj.exists() and json.loads(cj.read_text()) != json.loads(json.dumps(cams)):
-    for f in (rdir / "views").glob("*"):                             # views of other cameras: stale
-        f.unlink()
+    for d_ in (rdir, out / "render_base"):
+        for f in (d_ / "views").glob("*"):                           # views of other cameras: stale
+            f.unlink()
 if not a.renders:
     cj.write_text(json.dumps(cams, indent=1))
-scene.render(a.ply, cams, rdir, log=log)
-sts = scene.load_views(rdir, cams)
-check, sts = (sts[-1], sts[:-1]) if len(sts) == len(pts) else (None, sts)
-rep.update(stations_baked=len(sts), check_station=check is not None, t_render_s=round(time.time() - t1, 1))
+n_all = len(cams["views"]) // 6
+if a.colour == "base":                 # the bake's views: the splat's mean colour; the whole splat only from the check station
+    bdir = (rdir.parent if a.renders else out) / "render_base"      # beside the whole splat's views
+    bdir.mkdir(exist_ok=True)
+    base_ply = bdir.parent / "base_colour.ply"
+    if not base_ply.exists():
+        scene.base_colour_copy(a.ply, base_ply)
+    scene.render(base_ply, cams, bdir, log=log)
+    sts = scene.load_views(bdir, cams)
+    full_cams = dict(cams, views=cams["views"][-6:])
+    scene.render(a.ply, full_cams, rdir, log=log)
+    full = scene.load_views(rdir, full_cams)
+else:
+    scene.render(a.ply, cams, rdir, log=log)
+    sts = scene.load_views(rdir, cams)
+    full = sts[-1:]
+check, sts = (sts[-1], sts[:-1]) if len(sts) == n_all else (None, sts)
+check_full = full[0] if check is not None and full else None
+rep.update(colour=a.colour, stations_baked=len(sts), check_station=check is not None, t_render_s=round(time.time() - t1, 1))
 if check is None:
     log("    some views failed to render: no station is kept out, fidelity is measured from a baked one")
 
@@ -146,7 +194,8 @@ for k, (nf, res, den) in enumerate(zip(faces, texs, dens)):
         mask = fid >= 0
         pos = scene.interp(verts, uvf[fs], fid, bary)
         nrm = scene.interp(normals, uvf[fs], fid, bary, unit=True)
-        col, cov = scene.bake(pos, nrm, mask, sts, occ, off=2 * voxel)
+        col, cov = scene.bake(pos, nrm, mask, sts, occ, off=2 * voxel,
+                              **({} if a.mix == "mean" else dict(keep=2, tries=4, cos_power=4.0, dist_power=2.0, sharp=3.0)))
         used += int(mask.sum()); cov_n += int(cov.sum()); tex_n += mask.size
         img = (texture.inpaint(col, cov).clip(0, 1) * 255).round().astype(np.uint8)
         del col
@@ -183,15 +232,19 @@ for k, (nf, res, den) in enumerate(zip(faces, texs, dens)):
     scene.preview(verts, uvf, uvs, [scene.checker(res, tpu, square)] * nt, pts[0], out / f"uv_checker_lod{k}.png")
     fid_check = scene.fidelity(verts, uvf, uvs, ctiles, check or sts[0], out / f"fidelity_lod{k}.jpg")
     fid_baked = scene.fidelity(verts, uvf, uvs, ctiles, sts[0]) if check is not None else None
+    fid_full = scene.fidelity(verts, uvf, uvs, ctiles, check_full) if check_full is not None and a.colour == "base" else None
     del ctiles
     st.update(name=f"lod{k}", file=f"lod{k}.usdc", atlas=res, tiles=nt, maps=maps, height_scale_bias=height,
               uv=scene.uv_metrics(verts, uvf, uvs, res, charts, blen), atlas_used=used / tex_n,
               texels_covered=cov_n / max(used, 1), fidelity_check_station=fid_check, fidelity_baked_station=fid_baked,
+              fidelity_check_station_whole_splat=fid_full,
               t_s=round(time.time() - t2, 1))
     lods.append(st)
     log(f"lod{k}: {st['faces']} faces, {charts} islands, {tpu:.2f} texels a unit on {nt} tile(s) of {res}, atlas used "
         f"{used / tex_n:.0%}, covered {cov_n / max(used, 1):.1%}, PSNR {fid_check['psnr_mean']} SSIM {fid_check['ssim_mean']} "
-        f"from the station kept out  ({st['t_s']} s)")
+        f"from the station kept out"
+        + (f" (against the whole splat, view-dependent colour and all: {fid_full['psnr_mean']} / {fid_full['ssim_mean']})" if fid_full else "")
+        + f"  ({st['t_s']} s)")
 rep["tangent_space"] = ("per-vertex tangents computed the MikkTSpace way (angle-weighted, split by UV island) and written "
                         "as primvars:tangents / primvars:bitangentSign; normal maps baked in that basis, +Y up (OpenGL)")
 scene.write_lods(out, lods, a.default_lod)
