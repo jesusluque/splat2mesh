@@ -105,7 +105,7 @@ def coarse(m):
 
 
 src = Path(a.ply)
-key = {"method": 2, "ply": str(src.resolve()), "size": src.stat().st_size, "mtime": src.stat().st_mtime, "voxel": a.voxel, "blur": a.blur,
+key = {"method": 3, "ply": str(src.resolve()), "size": src.stat().st_size, "mtime": src.stat().st_mtime, "voxel": a.voxel, "blur": a.blur,
        "flatten": a.flatten, "stations": a.stations, "crop_pct": a.crop_pct, "min_piece": a.min_piece, "probes": a.probes,
        "fill_holes": a.fill_holes}
 cache = out / "mesh.npz"

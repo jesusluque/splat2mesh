@@ -484,6 +484,8 @@ def fill_holes(tm: trimesh.Trimesh, max_size: float, flat: float, g: dict | None
     gaussians `g`, a hole is an opening of the room, and stays, when the splat goes on behind it: the gaussians up
     to `depth` behind the hole's plane cover at least `opaque` of it (a window's bars, what is outside). A hole
     no wider than `pore` is closed whatever lies behind: a wall is thick, and its own gaussians are behind its pores.
+    Behind is the side the room's faces turn their backs to; at the mouth of a shaft (a pit of the skin that runs
+    out to the scene's box: its walls stand on the loop's plane) it is the side beyond the walls.
     The loop is triangulated in its plane; its vertices stay where they are.
     Returns (mesh, {"closed", "openings", "other"})."""
     vfn = None
@@ -493,13 +495,17 @@ def fill_holes(tm: trimesh.Trimesh, max_size: float, flat: float, g: dict | None
         vfn = tm.vertex_normals
     openings = 0
     e = tm.edges_sorted
-    be = tm.edges[trimesh.grouping.group_rows(e, require_count=1)]         # directed as their face has them
-    nxt = {}
+    rows = trimesh.grouping.group_rows(e, require_count=1)
+    be = tm.edges[rows]                                                    # directed as their face has them
+    bf = tm.edges_face[rows]                                               # the face each boundary edge belongs to
+    fcen, fnor = tm.triangles_center, tm.face_normals
+    nxt, rim = {}, {}
     multi = set()
-    for a, b in be:
+    for (a, b), q in zip(be, bf):
         if a in nxt:
             multi.add(a)
         nxt[int(a)] = int(b)
+        rim[int(a)] = q
     add, closed, left = [], 0, 0
     done = set()
     for a0 in list(nxt):
@@ -521,6 +527,9 @@ def fill_holes(tm: trimesh.Trimesh, max_size: float, flat: float, g: dict | None
         area2 = float((p2[:, 0] * np.roll(p2[:, 1], -1) - np.roll(p2[:, 0], -1) * p2[:, 1]).sum())
         if g is not None and np.ptp((P - c) @ vt[0]) > pore:
             out_ = -vfn[loop].mean(0)                              # away from the room
+            rf = [rim[i] for i in loop]
+            if np.abs(fnor[rf] @ vt[2]).mean() < 0.5:              # the mouth of a shaft (its walls stand on the loop's
+                out_ = vt[2] * float((c - fcen[rf].mean(0)) @ vt[2])   # plane, on one side of it): behind is beyond it
             n = vt[2] * (1.0 if vt[2] @ out_ > 0 else -1.0)
             rad = float(np.linalg.norm(p2, axis=1).max())
             near = np.asarray(tree.query_ball_point(c + n * depth / 2, np.hypot(rad, depth / 2)), int)
