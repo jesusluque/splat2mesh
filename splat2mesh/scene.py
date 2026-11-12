@@ -207,7 +207,9 @@ def render(ply, cams: dict, out: Path, batch: int = 18, log=print) -> None:
         cmds = []
         for v in todo[a:a + batch]:
             cmds.append(([athenea._bin(), "render", "--splats", str(ply), "--eye", *map(str, v["eye"]), "--target",
-                          *map(str, v["target"]), "--up", *map(str, v["up"]), "--focal", str(cams["focal_mm"]),
+                          *map(str, v["target"]), "--up", *map(str, v["up"]),
+                          "--focal", str(v.get("focal_mm", cams.get("focal_mm"))),
+                          *(["--near", str(v["near"])] if "near" in v else []),
                           "--size", f"{size}x{size}", "-o", str(d / f"{v['name']}.exr")], "tolerate"))
         athenea.run_script(cmds, log=Path(out) / f"render_{a:03d}.log")
         compact_views(out)
@@ -1034,6 +1036,216 @@ def bake(pos, nrm, mask, sts: list[dict], occluder, off: float, keep: int | None
     return tex, cov
 
 
+def bake_pick(pos, nrm, mask, sts: list[dict], occluder, off: float, sigma: float, chunk: int = 1_500_000):
+    """Texel colour from one station, the one that agrees best with the rest around the texel. A splat is clean only
+    from near where it was captured: elsewhere it shows specks, and the mean of all stations is a blur of them. A
+    station's error at a texel is its squared distance to the cosine-weighted mean of the stations that see the
+    texel; smoothed over `sigma` texels of the atlas (so the choice holds over a patch, not a texel) and divided by
+    the cosine of its view angle, the least wins and gives the texel its colour unmixed.
+    Returns (texture HxWx3, covered HxW)."""
+    import open3d as o3d
+    from scipy.ndimage import gaussian_filter
+    P_all, N_all = pos[mask].astype(np.float64), nrm[mask].astype(np.float64)
+    n, S = len(P_all), len(sts)
+    C = np.zeros((S, n, 3), np.uint8)
+    W = np.zeros((S, n), np.float16)                           # the cosine where the station sees the texel, else 0
+    for a in range(0, n, chunk):
+        P, N = P_all[a:a + chunk], N_all[a:a + chunk]
+        org = P + N * off
+        for k, st in enumerate(sts):
+            to = st["eye"] - org
+            ln = np.linalg.norm(to, axis=1)
+            cos = ((st["eye"] - P) * N).sum(1) / np.maximum(np.linalg.norm(st["eye"] - P, axis=1), 1e-9)
+            m = np.nonzero(cos > 0.05)[0]
+            if len(m) == 0:
+                continue
+            rays = np.concatenate([org[m], to[m] / ln[m, None]], 1).astype(np.float32)
+            m = m[occluder.cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy() >= ln[m]]
+            col, ok = _sample_station(st, P[m])
+            m = m[ok]
+            C[k, a + m] = (col[ok] * 255).round().astype(np.uint8)
+            W[k, a + m] = cos[m]
+    acc = np.zeros((n, 3), np.float32); ws = np.zeros(n, np.float32)
+    for k in range(S):
+        w = W[k].astype(np.float32)
+        acc += C[k] * w[:, None]; ws += w
+    good = ws > 0
+    mean = acc / np.maximum(ws, 1e-9)[:, None]
+    del acc
+    best = np.full(n, np.inf, np.float32); pick = np.zeros(n, np.int16)
+    img = np.zeros(mask.shape, np.float32); den = np.zeros(mask.shape, np.float32)
+    for k in range(S):
+        vis = W[k] > 0
+        if not vis.any():
+            continue
+        img[:] = 0; den[:] = 0
+        e = ((C[k].astype(np.float32) - mean) ** 2).sum(1)
+        img[mask] = np.where(vis, e, 0); den[mask] = vis
+        cost = (gaussian_filter(img, sigma)[mask] / np.maximum(gaussian_filter(den, sigma)[mask], 1e-3)
+                / np.maximum(W[k].astype(np.float32), 0.05))
+        cost[~vis] = np.inf
+        better = cost < best
+        best[better] = cost[better]; pick[better] = k
+    cols = C[pick, np.arange(n)].astype(np.float32) / 255.0
+    tex = np.zeros(pos.shape, np.float32)
+    cov = np.zeros(mask.shape, bool)
+    tex[mask] = np.where(good[:, None], cols, 0); cov[mask] = good
+    return tex, cov
+
+
+# ---------------------------------------------------------------- front views: every plane seen along its normal
+def front_views(tm: trimesh.Trimesh, pixel: float, clear: float, size: int = 2048, far: float = 20.0,
+                min_area: float = 0.004, overlap: float = 0.08, facing: float = 0.9, max_views: int = 96,
+                eyes=None, occluder=None, off: float = 0.0) -> dict:
+    """Cameras that look at the scene's planes head on. A splat's gaussians lie a little before and behind the
+    surface, so a view from the side shifts their colour along the surface by that depth times the tangent of the
+    view angle, and the mean of many such views is a blur. Along the normal the depth shifts nothing.
+    For each of the six axis directions the faces that look that way are grouped in slabs (their offsets along the
+    axis in bins of `clear`, the bins that hold a plane's worth of area, neighbours joined); a slab of at least `min_area` of the surface gets a mosaic of cameras, each
+    `far` times its own span away (the rays are parallel to within 1/(2·far)), with the near plane `clear` in front
+    of the slab: what stands between is cut away, the opposite wall first. A pixel is `pixel` scene units, made
+    larger when the mosaics would pass `max_views`. With `eyes` (the stations) and `occluder`, a slab most of which
+    no station sees gets none: it is the far side of a wall. Returns cameras as cube_views does, each view with its own
+    focal_mm and near, and n (the slab's normal)."""
+    from .athenea import APERTURE
+    fn, fa, fc = tm.face_normals, tm.area_faces, tm.triangles_center
+    total = fa.sum()
+    slabs = []
+    for ax in range(3):
+        o = [i for i in range(3) if i != ax]
+        for sgn in (1.0, -1.0):
+            n = np.zeros(3); n[ax] = sgn
+            sel = np.nonzero(fn[:, ax] * sgn > facing)[0]
+            if len(sel) == 0:
+                continue
+            h = fc[sel, ax] * sgn                               # towards the air
+            b = np.floor((h - h.min()) / clear).astype(int)
+            area = np.bincount(b, fa[sel])
+            occ = area >= min_area * total                      # a plane stacks its area in a bin; stray faces do not
+            start = np.nonzero(occ & ~np.r_[False, occ[:-1]])[0]
+            stop = np.nonzero(occ & ~np.r_[occ[1:], False])[0]
+            for b0, b1 in zip(start, stop):
+                m = sel[(b >= b0) & (b <= b1)]
+                if eyes is not None and occluder is not None:
+                    import open3d as o3d
+                    q = m[np.random.default_rng(0).choice(len(m), min(len(m), 400), replace=False)]
+                    org = fc[q] + fn[q] * off
+                    vis = np.zeros(len(q), bool)
+                    for e in np.asarray(eyes, np.float64):
+                        to = e - org; ln = np.linalg.norm(to, axis=1)
+                        rays = np.concatenate([org, to / ln[:, None]], 1).astype(np.float32)
+                        vis |= ((to * fn[q]).sum(1) > 0) & (occluder.cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy() >= ln)
+                    if vis.mean() < 0.5:
+                        continue
+                v = tm.vertices[tm.faces[m]].reshape(-1, 3)
+                lo, hi = np.percentile(v[:, o], 0.5, 0), np.percentile(v[:, o], 99.5, 0)
+                slabs.append((n, ax, o, float(h.min() + (b1 + 1) * clear), lo, hi))
+
+    def mosaic(px):
+        span = size * px
+        return [(max(1, int(np.ceil((hi[0] - lo[0]) / (span * (1 - overlap))))),
+                 max(1, int(np.ceil((hi[1] - lo[1]) / (span * (1 - overlap)))))) for *_, lo, hi in slabs]
+
+    count = sum(a * b for a, b in mosaic(pixel))
+    if count > max_views:
+        pixel *= float(np.sqrt(count / max_views)) * 1.05
+    span = size * pixel
+    D = far * span
+    focal = APERTURE * D / span
+    views = []
+    for k, ((n, ax, o, top, lo, hi), (nx, ny)) in enumerate(zip(slabs, mosaic(pixel))):
+        up = np.zeros(3); up[o[1]] = 1.0
+        f = -n
+        r = np.cross(f, up); d = np.cross(f, r)
+        R = np.stack([r, d, f])
+        for i in range(nx):
+            for j in range(ny):
+                c = np.zeros(3); c[ax] = top * n[ax]
+                c[o[0]] = lo[0] + (hi[0] - lo[0]) * (i + 0.5) / nx
+                c[o[1]] = lo[1] + (hi[1] - lo[1]) * (j + 0.5) / ny
+                eye = c + n * D
+                views.append({"name": f"f{k:02d}_{i}_{j}", "eye": eye.tolist(), "target": c.tolist(), "up": up.tolist(),
+                              "R_world_to_cam": R.tolist(), "t_world_to_cam": (-R @ eye).tolist(),
+                              "focal_mm": float(focal), "near": float(D - clear), "n": n.tolist()})
+    fx = focal / APERTURE * size
+    return {"convention": "opencv", "pixel": float(pixel), "overlap": overlap,
+            "intrinsics": {"width": size, "height": size, "fx": fx, "fy": fx, "cx": size / 2, "cy": size / 2},
+            "views": views}
+
+
+def load_front(out: Path, cams: dict, min_alpha: float = 0.6, median: int = 3) -> list[dict]:
+    """The front views that were rendered: [{"eye", "R", "n", "near", "img", "cov"}]. Head on, a splat without its
+    view-dependent colour shows stray gaussians as specks: a median of `median` pixels takes them out and keeps the
+    edges, and where the splat is thin (alpha under min_alpha) the view does not count."""
+    from PIL import Image
+    from scipy.ndimage import median_filter
+    res = []
+    for v in cams["views"]:
+        f = Path(out) / "views" / f"{v['name']}.rgba.png"
+        if not f.exists():
+            continue
+        im = np.asarray(Image.open(f))
+        if median > 1:
+            im = np.dstack([median_filter(im[..., :3], size=(median, median, 1)), im[..., 3]])
+        res.append({"eye": np.asarray(v["eye"], np.float64), "R": np.asarray(v["R_world_to_cam"], np.float64),
+                    "n": np.asarray(v["n"], np.float64), "near": float(v["near"]),
+                    "img": np.ascontiguousarray(im[..., :3]), "cov": im[..., 3] > min_alpha * 255})
+    return res
+
+
+def bake_front(pos, nrm, mask, fviews: list[dict], cams: dict, occluder, off: float, facing: float = 0.8,
+               chunk: int = 4_000_000):
+    """Texel colour from the front views (front_views): a texel whose normal is within acos(facing) of a view's
+    axis, behind that view's near plane and with nothing of the mesh between it and that plane, takes the view's
+    colour. Where two views of a mosaic overlap they are cross-faded. Returns (texture HxWx3, covered HxW)."""
+    import open3d as o3d
+    it = cams["intrinsics"]
+    fx, cx, cy, w, h = it["fx"], it["cx"], it["cy"], it["width"], it["height"]
+    feather = max(2.0, 0.5 * cams.get("overlap", 0.08) * w)
+    P_all, N_all = pos[mask].astype(np.float64), nrm[mask].astype(np.float64)
+    cols = np.zeros((len(P_all), 3), np.float32)
+    good = np.zeros(len(P_all), bool)
+    for a in range(0, len(P_all), chunk):
+        P, N = P_all[a:a + chunk], N_all[a:a + chunk]
+        acc = np.zeros((len(P), 3)); ws = np.zeros(len(P))
+        for fv in fviews:
+            cosn = N @ fv["n"]
+            m = np.nonzero(cosn > facing)[0]
+            if len(m) == 0:
+                continue
+            c = (P[m] - fv["eye"]) @ fv["R"].T
+            u = fx * c[:, 0] / c[:, 2] + cx - 0.5
+            v = fx * c[:, 1] / c[:, 2] + cy - 0.5
+            edge = np.minimum(np.minimum(u, w - 1 - u), np.minimum(v, h - 1 - v))
+            k = (edge > 1) & (c[:, 2] > fv["near"])
+            m, c, u, v, edge = m[k], c[k], u[k], v[k], edge[k]
+            if len(m) == 0:
+                continue
+            org = P[m] + N[m] * off
+            to = fv["eye"] - org
+            ln = np.linalg.norm(to, axis=1)
+            zo = (org - fv["eye"]) @ fv["R"][2]
+            reach = ln * (1 - fv["near"] / np.maximum(zo, 1e-9))        # as far as the near plane
+            rays = np.concatenate([org, to / ln[:, None]], 1).astype(np.float32)
+            k = (zo > fv["near"]) & (occluder.cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy() >= reach)
+            m, u, v, edge = m[k], u[k], v[k], edge[k]
+            x0 = np.floor(u).astype(int); y0 = np.floor(v).astype(int)
+            qx, qy = (u - x0)[:, None], (v - y0)[:, None]
+            img, cov = fv["img"], fv["cov"]
+            col = (img[y0, x0] * (1 - qx) * (1 - qy) + img[y0, x0 + 1] * qx * (1 - qy)
+                   + img[y0 + 1, x0] * (1 - qx) * qy + img[y0 + 1, x0 + 1] * qx * qy) / 255.0
+            k = cov[y0, x0] & cov[y0 + 1, x0 + 1] & cov[y0, x0 + 1] & cov[y0 + 1, x0]
+            wgt = (np.clip(edge / feather, 0, 1) * cosn[m] ** 4)[k]
+            acc[m[k]] += col[k] * wgt[:, None]; ws[m[k]] += wgt
+        ok = ws > 0
+        cols[a:a + chunk] = np.where(ok[:, None], acc / np.maximum(ws, 1e-300)[:, None], 0)
+        good[a:a + chunk] = ok
+    tex = np.zeros(pos.shape, np.float32)
+    cov = np.zeros(mask.shape, bool)
+    tex[mask] = cols; cov[mask] = good
+    return tex, cov
+
+
 def render_mesh(verts, faces, uvs, tiles: list, st: dict):
     """The mesh with its base colour (no light) from a station's six cameras: what the splat's views are compared
     with. tiles: the atlas's tiles as stored (HxWx3 uint8, v up from row 0). Returns [(rgb HxWx3 uint8, hit HxW)]."""
@@ -1070,8 +1282,10 @@ def render_mesh(verts, faces, uvs, tiles: list, st: dict):
 
 def fidelity(verts, faces, uvs, tiles: list, st: dict, png=None) -> dict:
     """How much of the splat the textured mesh keeps: PSNR and SSIM of the mesh's base colour against the splat's
-    own view, over the pixels both cover, for each of a station's six cameras. With png, the camera with the most
-    detail side by side at full size: the splat on the left, the mesh on the right."""
+    own view, over the pixels both cover, for each of a station's six cameras, and `sharp`: the variance of the
+    mesh picture's Laplacian over that of the splat's (1 is as sharp; PSNR and SSIM alone reward a blur). With png,
+    the camera with the most detail side by side at full size: the splat on the left, the mesh on the right."""
+    from scipy.ndimage import laplace, binary_erosion
     from skimage.metrics import structural_similarity
     from PIL import Image
     rows, best = [], None
@@ -1084,14 +1298,20 @@ def fidelity(verts, faces, uvs, tiles: list, st: dict, png=None) -> dict:
         ssim_map = structural_similarity(a, b, channel_axis=2, data_range=1.0, full=True)[1].mean(2)
         g = np.asarray(Image.fromarray(ref).convert("L"), np.float64)
         detail = float(np.abs(np.diff(g, axis=0))[m[1:]].mean() + np.abs(np.diff(g, axis=1))[m[:, 1:]].mean())
+        inner = binary_erosion(m, iterations=2)
+        gm = np.asarray(Image.fromarray(img).convert("L"), np.float64)
+        sharp = float(laplace(gm)[inner].var() / max(laplace(g)[inner].var(), 1e-12)) if inner.any() else None
         rows.append({"view": j, "psnr": round(10 * np.log10(1 / max(mse, 1e-12)), 2), "ssim": round(float(ssim_map[m].mean()), 4),
-                     "shared": round(float(m.mean()), 3), "detail": round(detail, 3)})
+                     "shared": round(float(m.mean()), 3), "detail": round(detail, 3),
+                     "sharp": None if sharp is None else round(sharp, 3)})
         if best is None or detail > best[0]:
             best = (detail, np.where(cov[..., None], ref, 0).astype(np.uint8), img)
     if png is not None and best is not None:
         Image.fromarray(np.concatenate([best[1], best[2]], 1)).save(png)
     return {"psnr_mean": round(float(np.mean([r["psnr"] for r in rows])), 2) if rows else None,
-            "ssim_mean": round(float(np.mean([r["ssim"] for r in rows])), 4) if rows else None, "views": rows}
+            "ssim_mean": round(float(np.mean([r["ssim"] for r in rows])), 4) if rows else None,
+            "sharp_mean": round(float(np.mean([r["sharp"] for r in rows if r["sharp"] is not None])), 3) if rows else None,
+            "views": rows}
 
 
 def stats(tm: trimesh.Trimesh) -> dict:
@@ -1103,15 +1323,17 @@ def stats(tm: trimesh.Trimesh) -> dict:
 
 # ---------------------------------------------------------------- USD, preview
 def write_lod(path: Path, verts, faces, uvs, normals, tang, sign, maps: dict, height=None, roughness: float = 0.8,
-              name: str = "Scene") -> None:
+              name: str = "Scene", meters_per_unit: float = 1.0, displace: bool = False) -> None:
     """One LOD: a mesh with st, normals and tangents (primvars:tangents, primvars:bitangentSign), and one material
     with a UsdPreviewSurface and a MaterialX standard_surface reading the same files. maps: basecolor, and when
     present normal, occlusion, height, roughness, metallic (file names beside the USD). height = (scale, bias) of
-    the height file, scene units."""
+    the height file, scene units. The height's texture and displacement nodes are always written; they are
+    connected to the material only with `displace` (a renderer that displaces for real would dent what was made
+    plane)."""
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
     stage = Usd.Stage.CreateNew(str(path))
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
-    UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+    UsdGeom.SetStageMetersPerUnit(stage, meters_per_unit)
     root = UsdGeom.Xform.Define(stage, f"/{name}")
     stage.SetDefaultPrim(root.GetPrim())
     mesh = UsdGeom.Mesh.Define(stage, f"/{name}/Geom")
@@ -1166,7 +1388,8 @@ def write_lod(path: Path, verts, faces, uvs, normals, tang, sign, maps: dict, he
     if "height" in maps and height is not None:
         t = tex("Height", maps["height"], "raw", (height[0],) * 3 + (1,), (height[1],) * 3 + (0,))
         t.CreateOutput("r", Sdf.ValueTypeNames.Float)
-        pbr.CreateInput("displacement", Sdf.ValueTypeNames.Float).ConnectToSource(t.ConnectableAPI(), "r")
+        if displace:
+            pbr.CreateInput("displacement", Sdf.ValueTypeNames.Float).ConnectToSource(t.ConnectableAPI(), "r")
     mat.CreateSurfaceOutput().ConnectToSource(pbr.ConnectableAPI(), "surface")
 
     # MaterialX: standard_surface on the same files
@@ -1214,17 +1437,18 @@ def write_lod(path: Path, verts, faces, uvs, normals, tang, sign, maps: dict, he
         dp.CreateInput("displacement", Sdf.ValueTypeNames.Float).ConnectToSource(rm.ConnectableAPI(), "out")
         dp.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(1.0)
         dp.CreateOutput("out", Sdf.ValueTypeNames.Token)
-        mat.CreateDisplacementOutput("mtlx").ConnectToSource(dp.ConnectableAPI(), "out")
+        if displace:
+            mat.CreateDisplacementOutput("mtlx").ConnectToSource(dp.ConnectableAPI(), "out")
     UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(mat)
     stage.GetRootLayer().Save()
 
 
-def write_lods(out: Path, lods: list[dict], default: int = 1, name: str = "Scene") -> None:
+def write_lods(out: Path, lods: list[dict], default: int = 1, name: str = "Scene", meters_per_unit: float = 1.0) -> None:
     """out/scene.usda: an Xform with a variantSet "lod"; each variant references that LOD's own file."""
     from pxr import Usd, UsdGeom
     stage = Usd.Stage.CreateNew(str(Path(out) / "scene.usda"))
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
-    UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+    UsdGeom.SetStageMetersPerUnit(stage, meters_per_unit)
     root = UsdGeom.Xform.Define(stage, f"/{name}").GetPrim()
     stage.SetDefaultPrim(root)
     vs = root.GetVariantSets().AddVariantSet("lod")

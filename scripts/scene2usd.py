@@ -57,12 +57,22 @@ ap.add_argument("--fill-holes", type=float, default=0.08, help="flat holes up to
                 "closed when the splat has nothing behind them (0: none)")
 ap.add_argument("--colour", default="base", choices=["base", "full"], help="base: the texture is baked from views of "
                 "the splat without its view-dependent colour (they agree with one another); full: from the splat as it is")
-ap.add_argument("--mix", default="mean", choices=["mean", "best"], help="a texel's colour: the mean of the stations "
-                "that see it, or the one that sees it best")
+ap.add_argument("--mix", default="mean", choices=["mean", "best", "pick"], help="a texel's colour: the mean of the "
+                "stations that see it (smooth, and blurred where they disagree); the one that sees it best; or pick, "
+                "the one that agrees best with the rest around the texel, unmixed (experimental)")
+ap.add_argument("--only", default=None, help="bake from these stations alone (their numbers, with commas): the ones "
+                "from which the splat looks clean")
+ap.add_argument("--front", type=float, default=0.0, help="experimental: scene units a pixel of front views, every "
+                "plane rendered head on and baked from that view (0: none). A splat seen from where it was not "
+                "captured can be full of specks, and then so are these")
 ap.add_argument("--cleanup", action="store_true", help="when done, delete what a new run can make again in minutes: "
                 "the whole splat's views but the check station's, and base_colour.ply")
 ap.add_argument("--fresh", action="store_true", help="do not reuse OUT_DIR/mesh.npz of an earlier run")
 ap.add_argument("--default-lod", type=int, default=1)
+ap.add_argument("--meters-per-unit", type=float, default=1.0, help="what a scene unit measures, written as the "
+                "stage's metersPerUnit (a capture rarely comes in metres; the geometry is not scaled)")
+ap.add_argument("--displacement", action="store_true", help="connect the height map to the materials' displacement "
+                "(it is written and left unconnected otherwise)")
 ap.add_argument("--no-detail", action="store_true", help="no normal, height and occlusion maps")
 ap.add_argument("--detail-reach", type=float, default=None, help="how far along the normal the fine surface is sought (default 6 voxels)")
 ap.add_argument("--ao-reach", type=float, default=None, help="occlusion distance (default 3 %% of the diagonal)")
@@ -74,7 +84,7 @@ faces = [int(x) for x in a.faces.split(",")]; texs = [int(x) for x in a.tex.spli
 texs += [texs[-1]] * (len(faces) - len(texs))
 dens = [float(x) for x in a.density.split(",")] if a.density else [None] * len(faces)
 dens += [None] * (len(faces) - len(dens))
-rep = {"input": a.ply, "up": a.up}
+rep = {"input": a.ply, "up": a.up, "meters_per_unit": a.meters_per_unit}
 t0 = time.time()
 
 
@@ -157,6 +167,8 @@ else:
     full = sts[-1:]
 check, sts = (sts[-1], sts[:-1]) if len(sts) == n_all else (None, sts)
 check_full = full[0] if check is not None and full else None
+if a.only:
+    sts = [sts[int(i)] for i in a.only.split(",")]
 rep.update(colour=a.colour, stations_baked=len(sts), check_station=check is not None, t_render_s=round(time.time() - t1, 1))
 if check is None:
     log("    some views failed to render: no station is kept out, fidelity is measured from a baked one")
@@ -164,6 +176,21 @@ if check is None:
 import open3d as o3d                                                 # noqa: E402
 occ = o3d.t.geometry.RaycastingScene()
 occ.add_triangles(raw.vertices.astype(np.float32), raw.faces.astype(np.uint32))
+fronts, fcams = [], None
+fpx = a.front
+if fpx > 0:                            # the planes head on; they follow the surface, so a new surface renders them anew
+    t1 = time.time()
+    fcams = scene.front_views(raw, fpx, 0.03 * diag, a.size, eyes=pts, occluder=occ, off=2 * voxel)
+    fdir = out / "render_front"; fdir.mkdir(exist_ok=True)
+    fj = fdir / "cameras.json"
+    if fj.exists() and json.loads(fj.read_text()) != json.loads(json.dumps(fcams)):
+        for f in (fdir / "views").glob("*"):
+            f.unlink()
+    fj.write_text(json.dumps(fcams, indent=1))
+    scene.render(base_ply if a.colour == "base" else a.ply, fcams, fdir, log=log)
+    fronts = scene.load_front(fdir, fcams)
+    rep.update(front_views=len(fronts), front_pixel=fcams["pixel"], t_front_s=round(time.time() - t1, 1))
+    log(f"front views: {len(fronts)} at {fcams['pixel']:.4f} a pixel  ({rep['t_front_s']} s)")
 U = scene.up_matrix(a.up)
 reach, ao_reach = a.detail_reach or 6 * voxel, a.ao_reach or 0.03 * diag
 square = a.checker or diag / 60
@@ -189,15 +216,25 @@ for k, (nf, res, den) in enumerate(zip(faces, texs, dens)):
     name = (lambda m, t: f"lod{k}_{m}.{1001 + t}.png") if nt > 1 else (lambda m, t: f"lod{k}_{m}.png")
     maps = {"basecolor": f"lod{k}_basecolor.<UDIM>.png" if nt > 1 else f"lod{k}_basecolor.png"}
     ctiles, ntiles, hraw = [], [], []
-    used = cov_n = tex_n = 0
+    used = cov_n = tex_n = front_n = 0
     for t in range(nt):
         fs = np.nonzero(ftile == t)[0]
         fid, bary = scene.rasterize_uv(uvf[fs], uvs - [t, 0], res)
         mask = fid >= 0
         pos = scene.interp(verts, uvf[fs], fid, bary)
         nrm = scene.interp(normals, uvf[fs], fid, bary, unit=True)
-        col, cov = scene.bake(pos, nrm, mask, sts, occ, off=2 * voxel,
-                              **({} if a.mix == "mean" else dict(keep=2, tries=4, cos_power=4.0, dist_power=2.0, sharp=3.0)))
+        rest = mask
+        if fronts:
+            colf, covf = scene.bake_front(pos, nrm, mask, fronts, fcams, occ, off=2 * voxel)
+            rest = mask & ~covf
+        if a.mix == "pick":
+            col, cov = scene.bake_pick(pos, nrm, rest, sts, occ, off=2 * voxel, sigma=max(2.0, 0.004 * diag * tpu))
+        else:
+            col, cov = scene.bake(pos, nrm, rest, sts, occ, off=2 * voxel,
+                                  **({} if a.mix == "mean" else dict(keep=2, tries=4, cos_power=4.0, dist_power=2.0, sharp=3.0)))
+        if fronts:
+            col[covf] = colf[covf]; cov |= covf; front_n += int(covf.sum())
+            del colf, covf
         used += int(mask.sum()); cov_n += int(cov.sum()); tex_n += mask.size
         img = (texture.inpaint(col, cov).clip(0, 1) * 255).round().astype(np.uint8)
         del col
@@ -229,7 +266,8 @@ for k, (nf, res, den) in enumerate(zip(faces, texs, dens)):
                       normals=normals, nmap=ntiles, tang=tang, sign=sign)
         scene.preview(verts, uvf, uvs, ctiles, pts[0], out / f"preview_lod{k}_lit_plain.png", light=light, normals=normals)
         del ntiles
-    scene.write_lod(out / f"lod{k}.usdc", verts @ U.T, uvf, uvs, normals @ U.T, tang @ U.T, sign, maps, height)
+    scene.write_lod(out / f"lod{k}.usdc", verts @ U.T, uvf, uvs, normals @ U.T, tang @ U.T, sign, maps, height,
+                    meters_per_unit=a.meters_per_unit, displace=a.displacement)
     scene.preview(verts, uvf, uvs, ctiles, pts[0], out / f"preview_lod{k}.png")
     scene.preview(verts, uvf, uvs, [scene.checker(res, tpu, square)] * nt, pts[0], out / f"uv_checker_lod{k}.png")
     fid_check = scene.fidelity(verts, uvf, uvs, ctiles, check or sts[0], out / f"fidelity_lod{k}.jpg")
@@ -238,18 +276,18 @@ for k, (nf, res, den) in enumerate(zip(faces, texs, dens)):
     del ctiles
     st.update(name=f"lod{k}", file=f"lod{k}.usdc", atlas=res, tiles=nt, maps=maps, height_scale_bias=height,
               uv=scene.uv_metrics(verts, uvf, uvs, res, charts, blen), atlas_used=used / tex_n,
-              texels_covered=cov_n / max(used, 1), fidelity_check_station=fid_check, fidelity_baked_station=fid_baked,
+              texels_covered=cov_n / max(used, 1), texels_front=front_n / max(used, 1), fidelity_check_station=fid_check, fidelity_baked_station=fid_baked,
               fidelity_check_station_whole_splat=fid_full,
               t_s=round(time.time() - t2, 1))
     lods.append(st)
     log(f"lod{k}: {st['faces']} faces, {charts} islands, {tpu:.2f} texels a unit on {nt} tile(s) of {res}, atlas used "
-        f"{used / tex_n:.0%}, covered {cov_n / max(used, 1):.1%}, PSNR {fid_check['psnr_mean']} SSIM {fid_check['ssim_mean']} "
+        f"{used / tex_n:.0%}, covered {cov_n / max(used, 1):.1%} ({front_n / max(used, 1):.0%} head on), PSNR {fid_check['psnr_mean']} SSIM {fid_check['ssim_mean']} sharpness {fid_check['sharp_mean']} "
         f"from the station kept out"
         + (f" (against the whole splat, view-dependent colour and all: {fid_full['psnr_mean']} / {fid_full['ssim_mean']})" if fid_full else "")
         + f"  ({st['t_s']} s)")
 rep["tangent_space"] = ("per-vertex tangents computed the MikkTSpace way (angle-weighted, split by UV island) and written "
                         "as primvars:tangents / primvars:bitangentSign; normal maps baked in that basis, +Y up (OpenGL)")
-scene.write_lods(out, lods, a.default_lod)
+scene.write_lods(out, lods, a.default_lod, meters_per_unit=a.meters_per_unit)
 rep.update(lods=lods, t_total_s=round(time.time() - t0, 1))
 (out / "report.json").write_text(json.dumps(rep, indent=2))
 if a.cleanup:
